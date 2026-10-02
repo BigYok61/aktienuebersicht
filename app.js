@@ -635,11 +635,11 @@ function renderDetail(id) {
       ${!idx ? `<div class="kv"><span>Nächste Zahlen</span><b>${s.earningsNext ? '📅 ' + dmy(s.earningsNext) : '–'}</b></div>` : ''}
       ${s.h52 != null && p ? `<div class="kv"><span>Abstand 52W-Hoch</span><b>${pct((p.v / s.h52 - 1) * 100)}</b></div>` : ''}
     </div>
-    ${idx ? '' : `<div class="card"><h3>Mein Bestand <small>nur auf diesem Gerät</small></h3>
+    ${idx ? '' : `<div class="card"><h3>Mein Bestand <small>verschlüsselt im Repo, auf allen Geräten</small></h3>
       ${hold ? `<div class="kv"><span>Anzahl</span><b>${nf0.format(hold.qty)}</b></div><div class="kv"><span>Ø Kaufpreis</span><b>${p2(hold.avg)} ${esc(m.currency || '')}</b></div>
       <div class="kv"><span>Bezahlt CHF (Einstand)</span><b>${p2(hold.costChf)}</b></div>${hold.sells ? `<div class="kv"><span>Realisiert CHF</span><b class="${lineCls(hold.realizedChf)}t">${sgn(hold.realizedChf)}</b></div>` : ''}<div class="kv"><span>Wert CHF</span><b>${p2(hold.value)}</b></div>
       <div class="kv"><span>G/V</span><b class="${lineCls(hold.gain)}t">${sgn(hold.gain)} (${pct(hold.gainPct)})</b></div><div class="kv"><span>Heute CHF</span><b class="${lineCls(hold.dayChf)}t">${sgn(hold.dayChf)}</b></div>` : '<p class="sub">Kein Bestand erfasst.</p>'}
-      <button id="dDepot">Käufe erfassen …</button></div>
+      <button id="dDepot">Kauf/Verkauf erfassen …</button></div>
     <div class="card"><h3>Kursalarme <small>Push via ntfy</small></h3>
       ${myAlerts.length ? myAlerts.map(a => `<div class="kv"><span>${a.op === '<' ? 'unter' : 'über'} ${p2(a.price)}${a.note ? ' · ' + esc(a.note) : ''}</span>${canEdit() ? `<button class="danger sm" data-adel="${esc(a.id)}">✕</button>` : ''}</div>`).join('') : '<p class="sub">Keine Alarme.</p>'}
       ${canEdit() ? `<div class="row"><select id="aOp"><option value="<">unter</option><option value=">">über</option></select><input id="aPx" type="number" step="any" placeholder="Kurs" style="width:7em"><input id="aNote" placeholder="Notiz" style="width:8em"><button id="aAdd">Hinzufügen</button></div>` : '<p class="small">Zum Bearbeiten GitHub-Token unter „Bearbeiten“ eintragen.</p>'}
