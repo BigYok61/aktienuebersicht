@@ -594,6 +594,20 @@ function select(id) {
 
 // ---------------------------------------------------------------- Detail
 function statCell(k, v, tip = '') { return `<div class="sc"${tip ? ` title="${esc(tip)}"` : ''}><span>${k}</span><b>${v}</b></div>`; }
+/** Kopf rechts wie Apple Aktien: ausserhalb der Handelszeit „Bei Börsenschluss“, bei US-Titeln zusätzlich
+ *  „Nach Börsenschluss“ bzw. „Vorbörslich“ (TradingView-Scanner: postmarket_close/-change, premarket_close/-change).
+ *  Während der regulären Sitzung (oder ohne Live-Daten) null → normale Kursanzeige. */
+function sessBox(id, p, c) {
+  if (isIndex(id)) return '';
+  const l = live.q[id]; if (!l || !ok(l.close) || !l.current_session || l.current_session === 'market') return '';
+  const part = (v, chg, lab) => `<div class="sbx"><div><b>${wc(id, p2(v))}</b> <span class="${chgCls(chg)}t">${pct(chg)}</span></div><small>${lab}</small></div>`;
+  let h = part(l.close, l.change, 'Bei Börsenschluss');
+  if (l.market === 'america') {
+    if (l.current_session === 'pre_market' && ok(l.premarket_close)) h += part(l.premarket_close, l.premarket_change, 'Vorbörslich');
+    else if (l.current_session !== 'pre_market' && ok(l.postmarket_close)) h += part(l.postmarket_close, ok(l.postmarket_change) ? l.postmarket_change : 0, 'Nach Börsenschluss');
+  }
+  return `<div class="sessbox" title="Kurse bis 15 Min. verzögert (TradingView)">${h}</div>`;
+}
 function renderDetail(id) {
   const it = itemOf(id), m = meta(id), s = stats(id), c = dayChange(id), p = nowPrice(id), idx = isIndex(id);
   const today = zurichToday();
@@ -601,7 +615,7 @@ function renderDetail(id) {
   const ccy = idx ? 'Punkte' : (m.currency || '');
   let h = `<div class="dhead"><button class="back" id="back">‹ Liste</button>
     <div class="dtitle"><h1>${esc(symOf(id))}</h1><span class="dname">${esc(m.longName || itemName(it))}</span><div class="dsub">${esc(ex)} · ${esc(ccy)} · ${esc(catOf(it))}</div></div>
-    <div class="dprice"><b>${p ? wc(id, p2(p.v)) : '–'}</b> <span class="${chgCls(c?.pct)}t">${c ? `${ok(c.abs) && curOf(id) ? esc(curOf(id)) + ' ' : ''}${sgn(c.abs)} (${pct(c.pct)})` : ''}</span>
+    <div class="dprice">${sessBox(id, p, c) || `<b>${p ? wc(id, p2(p.v)) : '–'}</b> <span class="${chgCls(c?.pct)}t">${c ? `${ok(c.abs) && curOf(id) ? esc(curOf(id)) + ' ' : ''}${sgn(c.abs)} (${pct(c.pct)})` : ''}</span>`}
     <div class="dsub">${p?.live ? 'Jetzt ' + hmFmt.format(p.time) + ' (bis 15 Min. verzögert)' : p?.time ? 'Stand ' + timeFmt.format(p.time) : p ? `Erfasst ${header(p.k)} ${pad(p.h)}:00` : ''}</div></div></div>`;
   h += `<div class="tabs" id="tabs">${RANGES.map(r => `<button data-r="${r}" class="${r === range ? 'on' : ''}">${RANGE_LABEL[r]}</button>`).join('')}</div>`;
   h += `<div class="chartwrap">${bigChartSvg(id, range)}<div id="chartTip" class="ctip" hidden></div></div>`;
@@ -923,7 +937,7 @@ async function tvScan(tickers, columns) {
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   return (await r.json()).data || [];
 }
-const LIVE_COLS = ['close', 'change', 'change_abs', 'update_time', 'open', 'high', 'low', 'volume'];
+const LIVE_COLS = ['close', 'change', 'change_abs', 'update_time', 'open', 'high', 'low', 'volume', 'premarket_close', 'premarket_change', 'postmarket_close', 'postmarket_change', 'market', 'current_session'];
 async function loadLive() {
   const ids = (watch.items || []).map(i => i.id); if (!ids.length) return;
   const ccys = [...new Set(ids.map(id => ccyInfo(meta(id).currency)[0]).filter(c => c && c !== 'CHF'))];

@@ -1,6 +1,6 @@
 // Service Worker: App-Shell und Daten zuerst aus dem Netz (am HTTP-Cache vorbei revalidiert), Fallback: Cache (offline)
-const V = 14;
-const CACHE = 'au-v14';
+const V = 15;
+const CACHE = 'au-v15';
 const SHELL = ['./', 'index.html', 'style.css?v=' + V, 'app.js?v=' + V, 'manifest.webmanifest', 'icons/icon.svg', 'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL.map(u => new Request(u, { cache: 'reload' })))).then(() => self.skipWaiting()));

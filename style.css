@@ -320,3 +320,11 @@ dialog .lots input:disabled { opacity: .55; }
 
 .swnew { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 50; background: var(--fg); color: var(--bg); padding: 8px 12px; border-radius: 10px; font-size: 13px; box-shadow: 0 6px 24px rgba(0,0,0,.25); }
 .swnew button { margin-left: 8px; height: 26px; }
+
+/* Kopf: Bei Börsenschluss | Nach Börsenschluss / Vorbörslich (wie Apple Aktien) */
+.sessbox { display: inline-flex; align-items: stretch; border: 1px solid var(--line); border-radius: 10px; background: var(--card); padding: 6px 0; text-align: left; }
+.sessbox .sbx { padding: 0 12px; display: flex; flex-direction: column; gap: 2px; }
+.sessbox .sbx + .sbx { border-left: 1px solid var(--line); }
+.sessbox .sbx b { font-size: 15px; font-weight: 600; } .sessbox .sbx b .cy { font-size: .78em; margin-right: .2em; }
+.sessbox .sbx span { font-size: 12px; font-weight: 600; margin-left: 6px; } .sessbox small { color: var(--muted); font-size: 11px; }
+.dprice .sessbox + .dsub { margin-top: 4px; }
