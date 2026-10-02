@@ -73,14 +73,14 @@ svg.spark.flat .ln { stroke: var(--muted); } svg.spark.flat .fill { fill: var(--
 .back { display: none; border: none; color: var(--accent); font-size: 16px; padding: 0 4px; background: none; }
 
 /* ---------- Detail */
-#detail { padding: 0 20px 24px; max-width: 1100px; }
+#detail { padding: 0 20px 24px; }
 .dhead { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
 .dhead .back { display: none; }
 .dtitle { flex: 1; min-width: 200px; } .dtitle h1 { font-size: 30px; font-weight: 800; display: inline; margin-right: 10px; }
 .dname { font-size: 18px; color: var(--muted); } .dsub { font-size: 12px; color: var(--muted); }
 .dprice { text-align: right; font-variant-numeric: tabular-nums; } .dprice b { font-size: 22px; }
 .tabs { display: flex; gap: 2px; margin: 14px 0 6px; flex-wrap: wrap; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
-.tabs button { border: none; background: none; font-weight: 600; font-size: 13px; color: var(--fg); border-radius: 7px; padding: 0 10px; }
+.tabs { flex-wrap: nowrap; } .tabs button { flex: 1 1 0; min-width: 0; white-space: nowrap; border: none; background: none; font-weight: 600; font-size: 13px; color: var(--fg); border-radius: 7px; padding: 0 10px; }
 .tabs button.on { background: var(--sect); color: var(--fg); }
 .chartwrap { position: relative; } svg.chart { width: 100%; height: 300px; display: block; overflow: visible; }
 svg.chart .ln { fill: none; stroke-width: 1.6; vector-effect: non-scaling-stroke; }
@@ -98,7 +98,7 @@ svg.chart .pdot { fill: var(--accent); }
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0 18px; margin: 12px 0; font-variant-numeric: tabular-nums; }
 .sc { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
 .sc span { color: var(--muted); } .sc b { font-weight: 600; }
-.extras { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 14px 0; }
+.extras { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; margin: 14px 0; }
 .card { background: var(--card); border-radius: 12px; padding: 12px 14px; }
 .kv { display: flex; justify-content: space-between; gap: 8px; padding: 3px 0; font-size: 13px; align-items: center; }
 .kv span { color: var(--muted); } .kv b { font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
@@ -264,5 +264,27 @@ dialog .lots input { width: 110px; }
 }
 @media (prefers-reduced-motion: reduce) { .pop { transition: none; } }
 .pop .pkv.w { grid-column: 1 / -1; }
-.list .xc { flex: 0 0 auto; min-width: 56px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; color: var(--muted); }
 @media (min-width: 761px) { .toolbar { display: none; } #detail { padding-top: 18px; } }
+
+/* Prognose-/Experten-Spalten rechts vom Kurs */
+body[data-cols="1"] #app { grid-template-columns: 380px 1fr; }
+body[data-cols="3"] #app { grid-template-columns: 480px 1fr; }
+body[data-cols="4"] #app { grid-template-columns: 540px 1fr; }
+.list .xc { flex: 0 0 50px; text-align: right; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.25; }
+.list .xc.exp { flex-basis: 58px; display: flex; flex-direction: column; align-items: flex-end; }
+.list .xc .x2 { font-size: 10px; font-weight: 500; opacity: .85; white-space: nowrap; }
+.list .xc .na { color: var(--faint); font-weight: 400; }
+.list .xc span[title] { cursor: help; }
+.list li.colhdr { position: sticky; top: 0; z-index: 2; background: var(--side); cursor: default; padding: 4px 8px; border-bottom: 1px solid var(--line);
+  font-size: 10.5px; font-weight: 600; color: var(--muted); }
+.list li.colhdr .spk { flex: 0 0 44px; } .list li.colhdr .px { align-items: flex-end; }
+.list li.colhdr .xc { font-size: 10.5px; color: var(--muted); } .list li.colhdr .xc.own { color: var(--purple); }
+.list li.colhdr .ib.sp { visibility: hidden; }
+.sbopts #colSel { flex: 1.2; }
+.xpt td a { color: var(--accent); text-decoration: none; }
+@media (max-width: 760px) {
+  .tabs button { padding: 0 2px; font-size: 12px; }
+  .list svg.spark, .list li.colhdr .spk { display: none; }
+  .list .xc { flex-basis: 42px; font-size: 11px; } .list .xc.exp { flex-basis: 48px; }
+  .list .px { min-width: 66px; } .list .pill { min-width: 56px; font-size: 11px; }
+}

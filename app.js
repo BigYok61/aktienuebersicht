@@ -3,7 +3,7 @@
 // Liest die verschlüsselten Dateien unter data/ (AES-256-GCM, PBKDF2-SHA256) und entschlüsselt im Browser (WebCrypto).
 // Depot nur lokal (localStorage), wird nie übertragen.
 const REPO = 'BigYok61/aktienuebersicht';
-const FILES = { watch: 'data/watchlist.enc.json', quotes: 'data/quotes.enc.json', news: 'data/news.enc.json', charts: 'data/charts.enc.json', alerts: 'data/alerts.enc.json' };
+const FILES = { watch: 'data/watchlist.enc.json', quotes: 'data/quotes.enc.json', news: 'data/news.enc.json', charts: 'data/charts.enc.json', alerts: 'data/alerts.enc.json', experts: 'data/experts.enc.json' };
 const HOURS = [9, 12, 15, 18, 22];
 const START = '2026-10-02';
 const TZ = 'Europe/Zurich';
@@ -14,8 +14,8 @@ const FC = [
   { k: '12m', label: 'Prognose 12 Monate', short: '12 Monate' },
 ];
 const DISCLAIMER = 'Schätzung, keine Anlageberatung';
-const RANGES = ['1T', '1W', '1M', '3M', '6M', 'YTD', '1J', '2J', '5J', 'ALLE'];
-const RANGE_LABEL = { '1T': '1 T.', '1W': '1 W.', '1M': '1 M.', '3M': '3 M.', '6M': '6 M.', YTD: 'YTD', '1J': '1 J.', '2J': '2 J.', '5J': '5 J.', ALLE: 'ALLE' };
+const RANGES = ['1T', '1W', '1M', '3M', '6M', 'YTD', '1J', '2J', '5J', '10J', 'ALLE'];
+const RANGE_LABEL = { '1T': '1 T.', '1W': '1 W.', '1M': '1 M.', '3M': '3 M.', '6M': '6 M.', YTD: 'YTD', '1J': '1 J.', '2J': '2 J.', '5J': '5 J.', '10J': '10 J.', ALLE: 'ALLE' };
 const SPARKS = { '1T': '1 T.', '5T': '5 T.', '1M': '1 M.', '1J': '1 J.' };
 const LS = { key: 'au.key', token: 'au.ghToken', prefs: 'au.prefs', portfolio: 'au.portfolio', cache: 'au.cache', hist: 'au.depotHist' };
 const INDEXES = [
@@ -112,12 +112,13 @@ function logout() {
 }
 
 // ---------------------------------------------------------------- Zustand
+let experts = { items: {}, notes: [] };
 let watch = { items: [], categories: [] }, quotes = { days: {}, symbols: {} }, news = { articles: [] }, charts = { s: {} }, alerts = { alerts: [] };
 let live = { q: {}, fx: {}, time: null, ok: false };
 let selected = null; // null = Übersicht
 let range = '1T';
 let searchQ = '';
-const prefs = Object.assign({ sort: 'cat', order: [], showFc: true, newsFilter: '', heute: 'pct', spark: '1T', range: '1T', sel: '' },
+const prefs = Object.assign({ sort: 'cat', order: [], showFc: true, cols: 'all', newsFilter: '', heute: 'pct', spark: '1T', range: '1T', sel: '' },
   JSON.parse(localStorage.getItem(LS.prefs) || '{}'));
 const savePrefs = () => localStorage.setItem(LS.prefs, JSON.stringify(prefs));
 let portfolio = loadPortfolio();
@@ -336,7 +337,7 @@ function series(id, r) {
   }
   if (r === 'ALLE') return { pts: dPts(c.a || []), prev: null, intraday: false };
   const d = c.d || []; const last = d.length ? ymd8(d[d.length - 1][0]) : zurichToday();
-  if (r === '5J') { const from = addMonths(last, -60).replace(/-/g, ''); return { pts: dPts((c.w || []).filter(x => String(x[0]) >= from)), prev: null, intraday: false }; }
+  if (r === '5J' || r === '10J') { const from = addMonths(last, r === '5J' ? -60 : -120).replace(/-/g, ''); return { pts: dPts((c.w || []).filter(x => String(x[0]) >= from)), prev: null, intraday: false }; }
   const from = r === 'YTD' ? last.slice(0, 4) + '-01-01' : addMonths(last, -({ '1M': 1, '3M': 3, '6M': 6, '1J': 12, '2J': 24 }[r]));
   const f8 = +from.replace(/-/g, '');
   return { pts: dPts(d.filter(x => x[0] >= f8)), prev: null, intraday: false };
@@ -359,9 +360,16 @@ function niceTicks(lo, hi, n = 4) {
   const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) out.push(+v.toFixed(10));
   return out;
 }
+function chartW() {
+  const d = $('detail'); if (!d || !d.clientWidth) return 720;
+  const cs = getComputedStyle(d); return Math.max(300, Math.round(d.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)));
+}
+let lastChartW = 0, resizeT = 0;
+window.addEventListener('resize', () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (selected && !$('detail').hidden && Math.abs(chartW() - lastChartW) > 8) renderDetail(selected); }, 150); });
 function bigChartSvg(id, r) {
+  lastChartW = chartW();
   const { pts, prev, intraday } = series(id, r);
-  const W = 720, H = 300, VH = 40, PR = 64, PB = 22;
+  const W = chartW(), H = 300, VH = 40, PR = 64, PB = 22;
   if (pts.length < 2) return `<div class="nochart">Für diesen Zeitraum liegen keine Chartdaten vor.</div>`;
   const vs = pts.map(p => p.v);
   let lo = Math.min(...vs, prev ?? Infinity), hi = Math.max(...vs, prev ?? -Infinity);
@@ -429,8 +437,44 @@ function wireChart() {
 }
 
 // ---------------------------------------------------------------- Seitenleiste
-/** Zusatzspalten in der Liste neben dem Kurs (Platzhalter, noch nicht festgelegt): { cls, html: id => '…' } */
-const LIST_COLS = [];
+/** Eigene Prognose je Horizont: jüngste Prognose, Veränderung gegenüber aktuellem Kurs */
+function ownFc(id, fk) {
+  const ks = Object.keys(quotes.days || {}).filter(k => fcOf(id, k, fk) != null).sort(); const k = ks[ks.length - 1];
+  if (!k) return null;
+  const v = fcOf(id, k, fk), p = nowPrice(id);
+  return { v, k, target: targetOf(k, fk), pct: p ? (v / p.v - 1) * 100 : null, base: p?.v };
+}
+/** Experten: Analystenkonsens 12 Mt. (TradingView) + veröffentlichte Kursziele (data/experts.enc.json, z. B. ARK Invest) */
+function expertList(id) {
+  const p = nowPrice(id), out = [];
+  const t = !isIndex(id) && quotes.targets?.[id];
+  if (t && t.mean != null) out.push({ src: 'Analystenkonsens', short: 'Konsens', target: t.mean, ccy: t.currency || meta(id).currency || '', horizon: '12 Mt.', date: t.asOf, count: t.count, low: t.low, high: t.high, via: t.source,
+    pct: p ? (t.mean / p.v - 1) * 100 : null });
+  for (const e of experts.items?.[id] || []) out.push({ ...e, short: e.short || e.src.split(' ')[0], date: e.published, pct: p && e.target ? (e.target / p.v - 1) * 100 : null });
+  return out;
+}
+function expertTip(x) {
+  return x.src === 'Analystenkonsens'
+    ? `Analystenkonsens (Mittelwert) 12 Monate: ${p2(x.target)} ${x.ccy} (${pct(x.pct)})${x.count ? `\n${x.count} Analysten, Spanne ${p2(x.low)} – ${p2(x.high)}` : ''}\nQuelle: ${x.via || 'TradingView'}, Stand ${dmy(x.date)}`
+    : `${x.src}: ${p2(x.target)} ${x.ccy} für ${x.horizon} (${pct(x.pct)} ggü. aktuellem Kurs)${x.bear != null ? `\nBär ${p2(x.bear)} · Bulle ${p2(x.bull)}` : ''}${x.kind ? '\n' + x.kind : ''}${x.note ? '\n' + x.note : ''}\nVeröffentlicht ${dmy(x.date)} · ${x.url || ''}`;
+}
+const nf1 = new Intl.NumberFormat('de-CH', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+const cpct = v => (!ok(v) ? '–' : (v > 0.05 ? '+' : v < -0.05 ? '−' : '') + (Math.abs(v) >= 100 ? nfi.format(Math.abs(v)) : nf1.format(Math.abs(v))) + '%'); // kompakt für die Liste
+const fcCell = (id, fk, lab) => {
+  const f = ownFc(id, fk); if (!f || !ok(f.pct)) return '<span class="na">–</span>';
+  return `<span class="${chgCls(f.pct)}t" title="${esc(`Eigene Prognose ${lab}: ${p2(f.v)} ${ccyLabel(id)} (Ziel ${dmy(f.target)}, erstellt ${dmy(f.k)} 09:00)\n${pct(f.pct)} ggü. aktuellem Kurs ${p2(f.base)}\n${DISCLAIMER}`)}">${cpct(f.pct)}</span>`;
+};
+/** Zusatzspalten in der Liste rechts vom Kurs: { grp: 'own' | 'exp', head, html: id => '…' } */
+const LIST_COLS = [
+  { grp: 'own', head: '7 T.', html: id => fcCell(id, '7d', '7 Tage') },
+  { grp: 'own', head: '3 M.', html: id => fcCell(id, '3m', '3 Monate') },
+  { grp: 'own', head: '12 M.', html: id => fcCell(id, '12m', '12 Monate') },
+  { grp: 'exp', head: 'Exp.', cls: 'exp', html: id => {
+    const xs = expertList(id); if (!xs.length) return '<span class="na">–</span>';
+    return xs.slice(0, 2).map((x, i) => `<span class="${i ? 'x2 ' : ''}${chgCls(x.pct)}t" title="${esc(expertTip(x))}">${i ? esc(x.short) + ' ' : ''}${cpct(x.pct)}</span>`).join('');
+  } },
+];
+const activeCols = () => LIST_COLS.filter(c => prefs.cols === 'all' || prefs.cols === c.grp);
 function pill(id) {
   const c = dayChange(id);
   const txt = !c ? '–' : prefs.pill === 'abs' ? sgn(c.abs) : pct(c.pct);
@@ -440,7 +484,9 @@ function renderSidebar() {
   const list = $('list');
   const q = searchQ.trim().toLowerCase();
   const items = orderedItems().filter(it => !q || symOf(it.id).toLowerCase().includes(q) || itemName(it).toLowerCase().includes(q) || it.id.toLowerCase().includes(q));
-  let h = '';
+  const cols = activeCols();
+  document.body.dataset.cols = cols.length;
+  let h = cols.length ? `<li class="colhdr"><div class="nm"></div><span class="spk"></span><div class="px">Kurs</div>${cols.map(c => `<div class="xc ${c.grp}" title="${c.grp === 'own' ? 'Eigene Prognose (Schätzung, keine Anlageberatung): Veränderung ggü. aktuellem Kurs' : 'Experten: Analystenkonsens 12 Mt. (TradingView), darunter veröffentlichte Kursziele (z. B. ARK Invest). Quelle und Datum im Tooltip.'}">${c.head}</div>`).join('')}<span class="ib sp"></span></li>` : '';
   let lastCat = null;
   const drag = prefs.sort === 'manual' && !q;
   for (const it of items) {
@@ -448,13 +494,13 @@ function renderSidebar() {
     const p = nowPrice(it.id);
     h += `<li class="st${selected === it.id ? ' sel' : ''}" data-id="${esc(it.id)}" data-pop="${esc(it.id)}"${drag ? ' draggable="true"' : ''}>
       <div class="nm"><b>${esc(symOf(it.id))}</b><small>${esc(itemName(it))}</small></div>
-      ${sparkSvg(it.id, 44, 20)}${LIST_COLS.map(c => `<div class="xc ${c.cls || ''}">${c.html(it.id)}</div>`).join('')}
-      <div class="px"><span class="v">${p ? p2(p.v) : '–'}</span>${pill(it.id).replace(/ title="[^"]*"/, '')}</div>${infoBtn(it.id)}</li>`;
+      ${sparkSvg(it.id, 44, 20)}
+      <div class="px"><span class="v">${p ? p2(p.v) : '–'}</span>${pill(it.id).replace(/ title="[^"]*"/, '')}</div>${cols.map(c => `<div class="xc ${c.cls || ''}">${c.html(it.id)}</div>`).join('')}${infoBtn(it.id)}</li>`;
   }
   if (!items.length) h += `<li class="empty">${q ? 'Kein Treffer in der Watchlist.' : 'Watchlist leer'}</li>`;
   list.innerHTML = h;
   list.querySelectorAll('li[data-id]').forEach(li => li.onclick = () => select(li.dataset.id));
-  $('sort').value = prefs.sort; $('sparkSel').value = prefs.spark;
+  $('sort').value = prefs.sort; $('sparkSel').value = prefs.spark; $('colSel').value = prefs.cols;
   popRefresh();
   if (drag) {
     let dragId = null;
@@ -518,6 +564,7 @@ function renderDetail(id) {
   h += `<div class="extras">
     <div class="card"><h3>Prognosen <small>${DISCLAIMER}</small></h3><table class="fct"><thead><tr><th></th><th>Prognose</th><th>Ziel</th><th>Ist (Abw.)</th></tr></thead><tbody>${fcRows}</tbody></table>
       <p class="small">Erstellt jeweils um 09:00 (Basis: Kurs 09:00); Ist = Schlusskurs am Zieltag.</p></div>
+    ${expertCard(id)}
     <div class="card"><h3>Analysten, Dividende, Termine</h3>
       ${ti ? `<div class="kv" title="${esc(ti.tip)}"><span>Kursziel 12 Mt. (Konsens)</span><b>${ti.mean != null ? `${p2(ti.mean)} <span class="${chgCls(ti.up)}t">${pct(ti.up)}</span>` : 'keine Daten'}</b></div>` : ''}
       ${ti?.t?.count ? `<div class="kv"><span>Analysten · Spanne</span><b>${ti.t.count} · ${p2(ti.t.low)} – ${p2(ti.t.high)}</b></div>` : ''}
@@ -550,6 +597,14 @@ function renderDetail(id) {
   };
   el.querySelectorAll('[data-adel]').forEach(b => b.onclick = () => editFile('alerts', cur => { cur.alerts = (cur.alerts || []).filter(a => a.id !== b.dataset.adel); }, 'Alarme geändert'));
   wireChart();
+}
+function expertCard(id) {
+  if (isIndex(id)) return '';
+  const xs = expertList(id);
+  const rows = xs.map(x => `<tr title="${esc(expertTip(x))}"><th>${esc(x.src === 'Analystenkonsens' ? 'Konsens' : x.src)}</th><td>${p2(x.target)} <small class="${chgCls(x.pct)}t">${cpct(x.pct)}</small></td><td>${esc(x.horizon)}</td><td>${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener noreferrer">${dmyShort(x.date)}</a>` : x.date ? dmyShort(x.date) : '–'}</td></tr>`).join('');
+  const notes = (experts.notes || []).map(n => esc(n)).join(' ');
+  return `<div class="card"><h3>Experten <small>Kursziele Dritter</small></h3>${rows ? `<table class="fct xpt"><thead><tr><th></th><th>Kursziel</th><th>Ziel</th><th>Stand</th></tr></thead><tbody>${rows}</tbody></table>` : '<p class="sub">Keine Kursziele von Experten verfügbar.</p>'}
+    <p class="small">Konsens = Mittelwert der Analysten (${esc(quotes.targets?.[id]?.source || 'TradingView')}); weitere Quellen nur, wo tatsächlich veröffentlicht. Details im Tooltip.</p>${notes ? `<p class="small">${notes}</p>` : ''}</div>`;
 }
 function newsCard(a) {
   const snip = a.snippet && a.snippet !== a.title ? `<p>${esc(a.snippet)}</p>` : '';
@@ -604,7 +659,8 @@ function popHtml(id) {
   }
   // Analysten
   const ti = targetInfo(id);
-  if (ti) h += grp('Analysten', ti.mean == null ? '<p class="psub">Kein Kursziel verfügbar.</p>' : `<div class="pgrid">${kv('Kursziel 12 Mt.', p2(ti.mean) + (ti.t.currency ? ' ' + esc(ti.t.currency) : ''))}${kv('Potenzial', pct(ti.up), chgCls(ti.up) + 't')}${ti.t.count ? kv('Analysten', String(ti.t.count)) : ''}${ti.t.low != null ? kv('Spanne', `${p2(ti.t.low)} – ${p2(ti.t.high)}`) : ''}</div>`);
+  const xp = (experts.items?.[id] || []).map(e => kv(`${esc(e.src)} ${esc(e.horizon)}`, `${p2(e.target)} ${esc(e.ccy)} <small class="psub">${dmyShort(e.published)}</small>`, '', true)).join('');
+  if (ti) h += grp('Analysten', (ti.mean == null ? '<p class="psub">Kein Kursziel verfügbar.</p>' : `<div class="pgrid">${kv('Kursziel 12 Mt.', p2(ti.mean) + (ti.t.currency ? ' ' + esc(ti.t.currency) : ''))}${kv('Potenzial', pct(ti.up), chgCls(ti.up) + 't')}${ti.t.count ? kv('Analysten', String(ti.t.count)) : ''}${ti.t.low != null ? kv('Spanne', `${p2(ti.t.low)} – ${p2(ti.t.high)}`) : ''}</div>`) + (xp ? `<div class="pgrid">${xp}</div>` : ''));
   // Dividende / Termine
   if (!idx) {
     const d = quotes.dividends?.[id], dv = divInfo(id), ccy = esc(m.currency || '');
@@ -619,7 +675,7 @@ function popHtml(id) {
   }
   // Mein Bestand
   const hold = holding(id);
-  if (hold) h += grp('Mein Bestand', `<div class="pgrid">${kv('Anzahl', nf0.format(hold.qty))}${kv('Ø Kaufpreis', p2(hold.avg))}${kv('Einstand CHF', p2(hold.costChf))}${kv('Wert CHF', p2(hold.value))}${kv('Heute CHF', sgn(hold.dayChf), lineCls(hold.dayChf) + 't')}${kv('G/V CHF', `${sgn(hold.gain)} (${pct(hold.gainPct)})`, lineCls(hold.gain) + 't')}</div>`, ' <small>nur auf diesem Gerät</small>');
+  if (hold) h += grp('Mein Bestand', `<div class="pgrid">${kv('Anzahl', nf0.format(hold.qty))}${kv('Ø Kaufpreis', p2(hold.avg))}${kv('Einstand CHF', p2(hold.costChf))}${kv('Wert CHF', p2(hold.value))}${kv('Heute CHF', sgn(hold.dayChf), lineCls(hold.dayChf) + 't')}${kv('G/V CHF', `${sgn(hold.gain)} (${pct(hold.gainPct)})`, lineCls(hold.gain) + 't', true)}</div>`, ' <small>nur auf diesem Gerät</small>');
   return h;
 }
 const pop = { el: null, id: null, anchor: null, pinned: false, showT: 0, hideT: 0, html: '', x: null, lp: null, suppressClick: false };
@@ -746,11 +802,12 @@ function showError(msg) { const e = $('error'); e.hidden = !msg; e.textContent =
 function showOk(msg) { const e = $('error'); e.hidden = !msg; e.textContent = msg || ''; e.className = 'ok'; }
 async function load() {
   try {
-    const [w, q, n, a] = await Promise.all([fetchBlob(FILES.watch), fetchBlob(FILES.quotes), fetchBlob(FILES.news).catch(() => null), fetchBlob(FILES.alerts).catch(() => null)]);
+    const [w, q, n, a, x] = await Promise.all([fetchBlob(FILES.watch), fetchBlob(FILES.quotes), fetchBlob(FILES.news).catch(() => null), fetchBlob(FILES.alerts).catch(() => null), fetchBlob(FILES.experts).catch(() => null)]);
     if (w.salt !== keySalt) { logout(); showLogin('Das Passwort wurde geändert. Bitte neu anmelden.'); return; }
     watch = await decryptBlob(w); quotes = await decryptBlob(q); news = n ? await decryptBlob(n) : { articles: [] };
     if (a && !alertsDirty) alerts = await decryptBlob(a);
-    try { localStorage.setItem(LS.cache, JSON.stringify({ w, q, n, a })); } catch { /* Speicher voll */ }
+    if (x) try { experts = await decryptBlob(x); } catch { /* ohne Experten */ }
+    try { localStorage.setItem(LS.cache, JSON.stringify({ w, q, n, a, x })); } catch { /* Speicher voll */ }
     showError('');
   } catch (e) {
     if (e.name === 'OperationError') { logout(); showLogin('Entschlüsselung fehlgeschlagen. Bitte Passwort neu eingeben.'); return; }
@@ -770,6 +827,7 @@ async function loadCache() {
     const c = JSON.parse(localStorage.getItem(LS.cache) || 'null'); if (!c) return;
     watch = await decryptBlob(c.w); quotes = await decryptBlob(c.q); news = c.n ? await decryptBlob(c.n) : { articles: [] };
     if (c.a) alerts = await decryptBlob(c.a);
+    if (c.x) experts = await decryptBlob(c.x);
     restoreSelection(); render();
   } catch { /* ignorieren */ }
 }
@@ -1045,6 +1103,7 @@ $('loginForm').addEventListener('submit', async e => {
 $('reload').addEventListener('click', load);
 $('logout').addEventListener('click', e => { e.preventDefault(); logout(); });
 $('sort').addEventListener('change', e => { prefs.sort = e.target.value; savePrefs(); render(); });
+$('colSel').addEventListener('change', e => { prefs.cols = e.target.value; savePrefs(); renderSidebar(); });
 $('sparkSel').addEventListener('change', e => { prefs.spark = e.target.value; savePrefs(); render(); });
 $('search').addEventListener('input', e => { searchQ = e.target.value; renderSidebar(); });
 $('search').addEventListener('keydown', e => { if (e.key === 'Enter') { const li = $('list').querySelector('li[data-id]'); if (li) select(li.dataset.id); } });

@@ -726,10 +726,11 @@ def build_chart(charts, sid, sym, intraday, daily_raw, today, errors, official=N
     e["d"] = dl[-560:]   # ca. 2 Jahre + YTD
     prev = [x for x in dl if last and str(x[0]) < last]
     e["pc"] = prev[-1][1] if prev else None
-    if e.get("wkDay") != today.isoformat() or "w" not in e:
+    if e.get("wkDay") != today.isoformat() or "w" not in e or e.get("wY") != 10:
         try:
-            wk = cnbc_bars(sym, "5Y")
-            e["w"] = [[int(b[5]), sig(b[4]), b[6]] for b in wk][-265:]
+            wk = cnbc_bars(sym, "10Y")   # Wochenkerzen; fuer 5 J. und 10 J. (letzte ~10 Jahre)
+            e["w"] = [[int(b[5]), sig(b[4]), b[6]] for b in wk][-523:]
+            e["wY"] = 10
             al = cnbc_bars(sym, "ALL")
             e["a"] = [[int(b[5]), sig(b[4])] for b in al]
             e["wkDay"] = today.isoformat()
