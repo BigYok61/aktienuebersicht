@@ -482,6 +482,11 @@ function expertList(id) {
   for (const e of experts.items?.[id] || []) out.push({ ...e, short: e.short || e.src.split(' ')[0], date: e.published, pct: p && e.target ? (e.target / p.v - 1) * 100 : null });
   return out;
 }
+/** einzeiliger Tooltip für die Listenspalte (Details im Popover / in der Detailansicht) */
+function expertShortTip(id, x) {
+  const c = curOf(id, x.ccy);
+  return `${x.src === 'Analystenkonsens' ? 'Analystenkonsens 12 Mt.' : `${x.src} ${x.horizon || ''}`.trim()}: ${c ? c + ' ' : ''}${p2(x.target)} (${pct(x.pct)}) · ${dmy(x.date)}`;
+}
 function expertTip(x) {
   return x.src === 'Analystenkonsens'
     ? `Analystenkonsens (Mittelwert) 12 Monate: ${p2(x.target)} ${x.ccy} (${pct(x.pct)})${x.count ? `\n${x.count} Analysten, Spanne ${p2(x.low)} – ${p2(x.high)}` : ''}\nQuelle: ${x.via || 'TradingView'}, Stand ${dmy(x.date)}`
@@ -498,7 +503,7 @@ const cpx = v => { // kompakter Kurswert für die Liste
 };
 const fcCell = (id, fk, lab) => {
   const f = ownFc(id, fk); if (!f || !ok(f.v)) return '<span class="na">–</span>';
-  return `<span class="${chgCls(f.pct)}t" title="${esc(`Eigene Prognose ${lab}: ${p2(f.v)} ${ccyLabel(id)} (Ziel ${dmy(f.target)}, erstellt ${dmy(f.k)} 09:00)\n${pct(f.pct)} ggü. aktuellem Kurs ${p2(f.base)}\n${DISCLAIMER}`)}">${wc(id, cpx(f.v))}</span>`;
+  return `<span class="${chgCls(f.pct)}t" title="${esc(`Prognose ${lab}: ${curOf(id) ? curOf(id) + ' ' : ''}${p2(f.v)} (${pct(f.pct)}) · Ziel ${dmy(f.target)}`)}">${wc(id, cpx(f.v))}</span>`;
 };
 /** Zusatzspalten in der Liste rechts vom Kurs: { grp: 'own' | 'exp', head, html: id => '…' } */
 const LIST_COLS = [
@@ -507,7 +512,7 @@ const LIST_COLS = [
   { grp: 'own', head: '12 M.', html: id => fcCell(id, '12m', '12 Monate') },
   { grp: 'exp', head: 'Exp.', cls: 'exp', html: id => {
     const xs = expertList(id); if (!xs.length) return '<span class="na">–</span>';
-    return xs.slice(0, 2).map((x, i) => `<span class="${i ? 'x2 ' : ''}${chgCls(x.pct)}t" title="${esc(expertTip(x))}">${i ? esc(x.short) + ' ' : ''}${wc(id, cpx(x.target), x.ccy)}</span>`).join('');
+    return xs.slice(0, 2).map((x, i) => `<span class="${i ? 'x2 ' : ''}${chgCls(x.pct)}t" title="${esc(expertShortTip(id, x))}">${i ? esc(x.short) + ' ' : ''}${wc(id, cpx(x.target), x.ccy)}</span>`).join('');
   } },
 ];
 const activeCols = () => LIST_COLS.filter(c => prefs.cols === 'all' || prefs.cols === c.grp);
@@ -543,7 +548,7 @@ function renderSidebar() {
   const items = orderedItems().filter(it => !q || symOf(it.id).toLowerCase().includes(q) || itemName(it).toLowerCase().includes(q) || it.id.toLowerCase().includes(q));
   const cols = activeCols();
   document.body.dataset.cols = cols.length;
-  let h = cols.length ? `<li class="colhdr"><div class="nm"></div><span class="spk"></span><div class="px">Kurs</div>${cols.map(c => `<div class="xc ${c.grp}" title="${c.grp === 'own' ? 'Eigene Prognose: erwarteter Kurs in Handelswährung (Schätzung, keine Anlageberatung). Grün/Rot: über/unter aktuellem Kurs (±1 %), Abweichung im Tooltip' : 'Experten-Kursziel in Handelswährung: Analystenkonsens 12 Mt. (TradingView), darunter veröffentlichte Kursziele (z. B. ARK Invest). Quelle, Datum und Abweichung im Tooltip.'}">${c.head}</div>`).join('')}<span class="ib sp"></span></li>` : '';
+  let h = cols.length ? `<li class="colhdr"><div class="nm"></div><span class="spk"></span><div class="px">Kurs</div>${cols.map(c => `<div class="xc ${c.grp}" title="${c.grp === 'own' ? 'Eigene Prognose (Schätzung, keine Anlageberatung)' : 'Experten-Kursziel (Konsens 12 Mt., veröffentlichte Ziele)'}">${c.head}</div>`).join('')}<span class="ib sp"></span></li>` : '';
   let lastCat = null;
   const drag = prefs.sort === 'manual' && !q;
   for (const it of items) {
@@ -802,23 +807,29 @@ function wirePopover() {
     if (pop.el && pop.el.contains(e.target)) { clearTimeout(pop.hideT); return; }
     const row = rowOf(e.target);
     if (!row) return;
-    // Liste: nur über Ticker/Name oder Kurs/Pill öffnen; Prognose-/Expertenspalten (eigene Tooltips) und Sparkline schliessen
-    if (row.closest('#list') && e.target !== row && !e.target.closest('.nm, .px')) {
-      clearTimeout(pop.showT); if (!pop.pinned && pop.el && !pop.el.hidden) popHideSoon(); return;
+    // Liste: nur über Ticker/Name, Sparkline oder Kurs/Pill öffnen (nach 400 ms). Die vier Prognose-/Expertenspalten
+    // (eigene einzeilige Tooltips) öffnen nie und schliessen ein offenes Popover sofort.
+    if (pop.supp && row.dataset.pop !== pop.supp) pop.supp = null; // andere Zeile: Sperre aufheben
+    if (pop.supp) return; // nach Klick auf diese Zeile kein Popover, bis die Maus sie verlassen hat
+    if (row.closest('#list')) {
+      const hot = e.target.closest('.nm, .spark, .px'); // links der vier Spalten
+      const gapSameRow = e.target === row && pop.anchor === row;
+      if (!hot) { if (!gapSameRow) { clearTimeout(pop.showT); if (!pop.pinned && pop.el && !pop.el.hidden) popHide(); } return; }
     }
-    if (row.closest('#list') && e.target === row) return; // Zwischenraum: Zustand beibehalten
     if (pop.pinned && pop.anchor === row) return;
     clearTimeout(pop.hideT);
     if (pop.anchor === row && !pop.el.hidden) return;
+    if (row.closest('#list') && !pop.pinned && pop.el && !pop.el.hidden) popHide(); // keins von einer anderen Zeile mitnehmen
     clearTimeout(pop.showT);
     const go = () => { pop.fromList = !!row.closest('#list'); popShow(row.dataset.pop, row); };
-    pop.showT = setTimeout(go, pop.el && !pop.el.hidden ? 90 : 350);
+    pop.showT = setTimeout(go, row.closest('#list') ? 400 : (pop.el && !pop.el.hidden ? 90 : 350));
   });
   document.addEventListener('pointermove', e => { if (e.pointerType === 'mouse' && !(pop.el && !pop.el.hidden)) pop.x = e.clientX; }, { passive: true });
   document.addEventListener('pointerout', e => {
     if (e.pointerType !== 'mouse' || pop.pinned) return;
     const row = rowOf(e.target); if (!row) return;
     const to = e.relatedTarget;
+    if (pop.supp && to && rowOf(to)?.dataset.pop !== pop.supp) pop.supp = null;
     if (to && (row.contains(to) || (pop.el && pop.el.contains(to)))) return;
     if (to && rowOf(to)) return; // zur nächsten Zeile: pointerover übernimmt
     clearTimeout(pop.showT); popHideSoon();
@@ -836,7 +847,10 @@ function wirePopover() {
     if (pop.pinned && !(pop.el && pop.el.contains(e.target))) popHide();
   }, true);
   document.addEventListener('pointerdown', e => {
-    if (e.pointerType === 'mouse') { if (pop.pinned && !(pop.el && pop.el.contains(e.target)) && !e.target.closest('[data-popbtn]')) popHide(); return; }
+    if (e.pointerType === 'mouse') {
+      const lr = e.target.closest?.('#list [data-pop]');
+      if (lr && !e.target.closest('[data-popbtn]')) { pop.supp = lr.dataset.pop; popHide(); return; }
+      if (pop.pinned && !(pop.el && pop.el.contains(e.target)) && !e.target.closest('[data-popbtn]')) popHide(); return; }
     const row = rowOf(e.target); if (!row || e.target.closest('[data-popbtn]')) return;
     const sx = e.clientX, sy = e.clientY;
     clearTimeout(pop.lp);
@@ -1343,7 +1357,32 @@ document.addEventListener('keydown', e => {
 document.addEventListener('visibilitychange', () => { if (!document.hidden && cryptoKey) load(); });
 setInterval(() => { if (cryptoKey && !document.hidden) loadLive(); }, 2 * 60 * 1000);
 setInterval(() => { if (cryptoKey && !document.hidden) load(); }, 15 * 60 * 1000);
-if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
+/* Service Worker: neue Version sofort aktivieren (skipWaiting/clients.claim im SW) und Seite einmal neu laden.
+   Ohne gespeicherten Schlüssel oder bei offenem Dialog nur Hinweis, damit nichts verloren geht. */
+if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+  const hadCtl = !!navigator.serviceWorker.controller;
+  let reloading = false;
+  const doReload = () => {
+    if (reloading) return;
+    const busy = document.querySelector('dialog[open]') || !localStorage.getItem(LS.key);
+    if (busy) {
+      if (!document.getElementById('swNew')) {
+        const b = document.createElement('div'); b.id = 'swNew'; b.className = 'swnew';
+        b.innerHTML = 'Neue Version verfügbar. <button type="button">Neu laden</button>';
+        b.querySelector('button').onclick = () => { reloading = true; location.reload(); };
+        document.body.appendChild(b);
+      }
+      return;
+    }
+    reloading = true; location.reload();
+  };
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadCtl) doReload(); });
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+    const chk = () => reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') chk(); });
+    setInterval(chk, 30 * 60 * 1000);
+  }).catch(() => {});
+}
 (async () => {
   if (await restoreKey()) { showApp(); await loadCache(); await load(); fillMissingFx(); }
   else showLogin();
