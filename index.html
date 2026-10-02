@@ -6,7 +6,9 @@
 <title>Aktienübersicht</title>
 <meta name="description" content="Aktienübersicht – Watchlist mit Kursen, Prognosen, Dividenden und Kurszielen">
 <meta name="robots" content="noindex, nofollow">
-<meta name="theme-color" content="#11795a">
+<meta name="theme-color" content="#f5f5f7" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#1c1c1e" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
@@ -31,48 +33,41 @@
 </div>
 
 <div id="app" hidden>
-<header>
-  <div class="titlebar">
-    <h1>Aktienübersicht</h1>
-    <div class="tools">
+<aside id="sidebar">
+  <div class="sbtop">
+    <div class="sbtitle"><h1>Aktien</h1>
+      <div class="tools"><button id="editBtn" type="button" title="Watchlist bearbeiten">Bearbeiten</button><button id="depotBtn" type="button" title="Depot (nur auf diesem Gerät gespeichert)">Depot</button><button id="reload" type="button" aria-label="Aktualisieren" title="Aktualisieren">↻</button></div></div>
+    <input id="search" type="search" placeholder="🔍 Aktien" autocomplete="off" aria-label="Watchlist durchsuchen">
+    <div class="sbopts">
       <select id="sort" aria-label="Sortierung" title="Sortierung">
-        <option value="alpha">Alphabetisch</option>
-        <option value="cat">Nach Kategorie</option>
-        <option value="manual">Eigene Reihenfolge</option>
+        <option value="cat">Nach Kategorie</option><option value="alpha">Alphabetisch (Ticker)</option><option value="name">Alphabetisch (Name)</option>
+        <option value="chg">Nach Tagesveränderung</option><option value="manual">Eigene Reihenfolge</option>
       </select>
-      <button id="editBtn" type="button" title="Watchlist bearbeiten">Bearbeiten</button>
-      <button id="depotBtn" type="button" title="Depot (nur auf diesem Gerät gespeichert)">Depot</button>
-      <button id="reload" type="button" aria-label="Aktualisieren" title="Aktualisieren">↻</button>
+      <select id="sparkSel" aria-label="Zeitraum der Mini-Charts" title="Zeitraum der Mini-Charts"><option value="1T">1 T.</option><option value="5T">5 T.</option><option value="1M">1 M.</option><option value="1J">1 J.</option></select>
     </div>
   </div>
-  <p id="stand" class="sub">Lade Daten …</p>
-  <p class="note">Kurse werktags um 09, 12, 15, 18 und 22 Uhr Schweizer Zeit (Europe/Zurich) in der Handelswährung, Veränderung gegenüber 09:00. „Jetzt“: aktueller Kurs (bis 15 Min. verzögert).</p>
-  <p class="note purple">* Prognosen (Tagesende, 7 Tage, 3 Monate, 12 Monate), jeweils zum ersten Zeitpunkt des Tages erstellt: Schätzung, keine Anlageberatung.</p>
-  <label class="chk small"><input id="showFc" type="checkbox" checked> Prognosen anzeigen</label>
+  <ul id="list" class="list"></ul>
+  <div class="sbfoot"><span id="stand">Lade …</span> · <span id="updated"></span><br><a href="#" id="csv">CSV</a> · <a href="#" id="logout">Abmelden</a></div>
+</aside>
+<div id="main">
+  <div class="toolbar"><button class="back" id="backOv" type="button">‹ Liste</button><span class="sp"></span><button id="viewTgl" type="button" title="Zwischen Detail und Übersicht/Tabelle wechseln">Übersicht</button></div>
   <div id="error" class="error" hidden></div>
-</header>
-<section id="editor" class="panel" hidden></section>
-<main>
-  <div class="scroller" id="scroller">
-    <table id="grid" aria-label="Kursübersicht"></table>
-  </div>
-</main>
-<section class="news">
-  <div class="newshead">
-    <h2>News <span class="sub" id="newsInfo"></span></h2>
-    <div class="tools">
-      <select id="newsFilter" aria-label="News filtern"></select>
-      <label class="chk small"><input id="newsGroup" type="checkbox"> nach Aktie gruppieren</label>
-    </div>
-  </div>
-  <div id="newsList"></div>
-</section>
-<footer>
-  <span>Quellen: CNBC (Kurse, Devisen, Dividenden), TradingView (Jetzt-Kurse, Termine, Kursziele, Suche), Google News, EZB via Frankfurter</span>
-  <span id="updated"></span>
-  <a href="#" id="csv">CSV</a>
-  <a href="#" id="logout">Abmelden</a>
-</footer>
+  <section id="editor" class="panel" hidden></section>
+  <section id="detail" hidden></section>
+  <section id="overview">
+    <h1 class="ovh">Übersicht</h1>
+    <p class="note">Kurse werktags um 09, 12, 15, 18 und 22 Uhr Schweizer Zeit in der Handelswährung, Veränderung gegenüber 09:00. „Heute“: gegenüber Vortagesschluss (grün &gt; +1 %, rot &lt; −1 %). „Jetzt“: aktueller Kurs (bis 15 Min. verzögert), überschreibt keine Zeitpunkt-Werte.</p>
+    <p class="note purple">* Prognosen (Tagesende, 7 Tage, 3 Monate, 12 Monate), jeweils um 09:00 erstellt: Schätzung, keine Anlageberatung.</p>
+    <label class="chk small"><input id="showFc" type="checkbox" checked> Prognosen anzeigen</label>
+    <div id="pcharts" class="pcharts"></div>
+    <div class="scroller" id="scroller"><table id="grid" aria-label="Kursübersicht"></table></div>
+    <section class="news">
+      <div class="newshead"><h2>News <span class="sub" id="newsInfo"></span></h2><select id="newsFilter" aria-label="News filtern"></select></div>
+      <div id="newsList"></div>
+    </section>
+    <p class="small">Quellen: CNBC (Kurse, Charts, Devisen, Dividenden), TradingView (Jetzt-Kurse, Kennzahlen, Termine, Kursziele, Suche), Google News, EZB via Frankfurter. Kurse verzögert, ohne Gewähr.</p>
+  </section>
+</div>
 </div>
 
 <dialog id="depot"></dialog>

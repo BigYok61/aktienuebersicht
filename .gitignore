@@ -7,3 +7,4 @@ data/*.json
 screenshot*.png
 .DS_Store
 build/
+data/charts.enc.json

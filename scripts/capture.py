@@ -37,7 +37,7 @@ F_NEWS = os.path.join(ROOT, "data", "news.enc.json")
 F_CHARTS = os.environ.get("AU_CHARTS_OUT") or os.path.join(ROOT, "build", "charts.enc.json")
 CHARTS_URL = "https://bigyok61.github.io/aktienuebersicht/data/charts.enc.json"
 
-DEFAULT_CATEGORIES = ["Indizes", "Tech", "Auto", "Pharma", "Banken", "Konsum", "Industrie"]
+DEFAULT_CATEGORIES = ["Indizes", "Auto", "Tech", "Konsum", "Industrie", "Banken/Finanz", "Pharma", "Telekom"]
 # TradingView-Boerse -> CNBC-Suffix
 EXCHANGE_SUFFIX = {"SIX": "-CH", "BX": "-CH", "XETR": "-DE", "FWB": "-DE", "NASDAQ": "", "NYSE": "", "AMEX": "",
                    "NYSE ARCA": "", "CBOE": "", "OTC": "", "LSE": "-GB", "MIL": "-IT", "BME": "-ES", "TSX": "-CA",
@@ -90,7 +90,7 @@ def category_for(sector, industry, typ):
     if s in ("health technology", "health services"):
         return "Pharma"
     if s == "finance":
-        return "Banken"
+        return "Banken/Finanz"
     if s in ("consumer non-durables", "consumer durables", "retail trade", "consumer services"):
         return "Konsum"
     if s in ("producer manufacturing", "industrial services", "process industries", "non-energy minerals",
@@ -673,6 +673,7 @@ def build_chart(charts, sid, sym, intraday, daily_raw, today, errors):
             else:
                 a[1] = sig(b[4]); a[2] += b[6]
     e["i"] = sorted(list(agg.values()) + rows)
+    e["i1n"] = len(rows)   # die letzten i1n Eintraege = letzter Handelstag (5 Min.)
     e["iDay"] = last
     dl = [[int(b[5]), sig(b[4]), b[6]] for b in daily_raw if b[5] and b[5][:8].isdigit()]
     dl.sort()

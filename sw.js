@@ -1,5 +1,5 @@
 // Service Worker: App-Shell aus dem Cache, (verschlüsselte) Daten immer zuerst aus dem Netz (Fallback: Cache)
-const CACHE = 'au-v1';
+const CACHE = 'au-v2';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/apple-touch-icon.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', e => {
