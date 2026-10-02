@@ -34,8 +34,9 @@ const nfi = new Intl.NumberFormat('de-CH', { maximumFractionDigits: 0 });
 const ok = v => v != null && isFinite(v);
 const p2 = v => (!ok(v) ? '–' : nf2.format(v));
 const p4 = v => (!ok(v) ? '–' : nf4.format(v));
-const pct = v => (!ok(v) ? '–' : (v > 0 ? '+' : '') + nf2.format(v) + ' %');
-const sgn = v => (!ok(v) ? '–' : (v > 0 ? '+' : '') + nf2.format(v));
+const z2 = v => (Math.abs(v) < 0.005 ? 0 : v); // kein «-0.00»
+const pct = v => (!ok(v) ? '–' : (z2(v) > 0 ? '+' : '') + nf2.format(z2(v)) + ' %');
+const sgn = v => (!ok(v) ? '–' : (z2(v) > 0 ? '+' : '') + nf2.format(z2(v)));
 const big = v => (!ok(v) ? '–' : Math.abs(v) >= 1e12 ? nf2.format(v / 1e12) + ' Bio.' : Math.abs(v) >= 1e9 ? nf2.format(v / 1e9) + ' Mrd.' : Math.abs(v) >= 1e6 ? nf2.format(v / 1e6) + ' Mio.' : nfi.format(v));
 const pad = h => String(h).padStart(2, '0');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
@@ -330,7 +331,7 @@ function series(id, r) {
     let pts = toPts(r === '1T' ? i.slice(i.length - n) : i);
     const l = live.q[id];
     if (r === '1T' && l && l.close != null && l.update_time && pts.length && l.update_time * 1000 > pts[pts.length - 1].t + 60000
-      && new Date(l.update_time * 1000).toDateString() === new Date(pts[pts.length - 1].t).toDateString()) pts = [...pts, { t: l.update_time * 1000, v: l.close, vol: 0 }];
+      && l.update_time * 1000 - pts[pts.length - 1].t < 4 * 3600000) pts = [...pts, { t: l.update_time * 1000, v: l.close, vol: 0 }];
     return { pts, prev: r === '1T' ? c.pc : null, intraday: true };
   }
   if (r === 'ALLE') return { pts: dPts(c.a || []), prev: null, intraday: false };
