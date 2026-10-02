@@ -315,5 +315,5 @@ dialog .lots input:disabled { opacity: .55; }
 .dprice b .cy { font-size: .62em; font-weight: 500; margin-right: .25em; }
 @media (min-width: 761px) { .list .xc { flex-basis: 58px; } .list .xc.exp { flex-basis: 66px; } }
 .list .xc .cy { font-size: 9.5px; margin-right: 2px; }
-@media (max-width: 760px) { .list .xc { flex-basis: 44px; } .list .xc.exp { flex-basis: 50px; } .list .nm { min-width: 58px; } .list .xc .cy { font-size: 8px; margin-right: 1px; } .list .px .v .cy { font-size: 10px; } .list li { gap: 6px; } }
+@media (max-width: 760px) { .list .xc { flex-basis: 40px; font-size: 10.5px; } .list .xc.exp { flex-basis: 46px; } .list .px .v { font-size: 13px; } .list .nm { min-width: 58px; } .list .xc .cy { display: block; font-size: 8px; line-height: 1; margin: 0 0 1px; } .list .px .v .cy { font-size: 9px; margin-right: 2px; } .list .nm b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .list li { gap: 6px; } }
 .list .xc .x2 .cy { font-size: 8.5px; }
