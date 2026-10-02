@@ -118,7 +118,7 @@ let live = { q: {}, fx: {}, time: null, ok: false };
 let selected = null; // null = Übersicht
 let range = '1T';
 let searchQ = '';
-const prefs = Object.assign({ sort: 'cat', order: [], showFc: true, cols: 'all', newsFilter: '', heute: 'pct', spark: '1T', range: '1T', sel: '' },
+const prefs = Object.assign({ pill: 'pct', sort: 'cat', order: [], showFc: true, cols: 'all', newsFilter: '', heute: 'pct', spark: '1T', range: '1T', sel: '' },
   JSON.parse(localStorage.getItem(LS.prefs) || '{}'));
 const savePrefs = () => localStorage.setItem(LS.prefs, JSON.stringify(prefs));
 let portfolio = loadPortfolio();
@@ -460,9 +460,16 @@ function expertTip(x) {
 }
 const nf1 = new Intl.NumberFormat('de-CH', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 const cpct = v => (!ok(v) ? '–' : (v > 0.05 ? '+' : v < -0.05 ? '−' : '') + (Math.abs(v) >= 100 ? nfi.format(Math.abs(v)) : nf1.format(Math.abs(v))) + '%'); // kompakt für die Liste
+const cpx = v => { // kompakter Kurswert für die Liste
+  if (!ok(v)) return '–'; const a = Math.abs(v);
+  if (a < 1000) return nf2.format(v);
+  if (a < 100000) return nfi.format(v);
+  if (a < 1e6) return nf1.format(v / 1e3).replace(/\.0$/, '') + 'k';
+  return nf1.format(v / 1e6).replace(/\.0$/, '') + 'M';
+};
 const fcCell = (id, fk, lab) => {
-  const f = ownFc(id, fk); if (!f || !ok(f.pct)) return '<span class="na">–</span>';
-  return `<span class="${chgCls(f.pct)}t" title="${esc(`Eigene Prognose ${lab}: ${p2(f.v)} ${ccyLabel(id)} (Ziel ${dmy(f.target)}, erstellt ${dmy(f.k)} 09:00)\n${pct(f.pct)} ggü. aktuellem Kurs ${p2(f.base)}\n${DISCLAIMER}`)}">${cpct(f.pct)}</span>`;
+  const f = ownFc(id, fk); if (!f || !ok(f.v)) return '<span class="na">–</span>';
+  return `<span class="${chgCls(f.pct)}t" title="${esc(`Eigene Prognose ${lab}: ${p2(f.v)} ${ccyLabel(id)} (Ziel ${dmy(f.target)}, erstellt ${dmy(f.k)} 09:00)\n${pct(f.pct)} ggü. aktuellem Kurs ${p2(f.base)}\n${DISCLAIMER}`)}">${cpx(f.v)}</span>`;
 };
 /** Zusatzspalten in der Liste rechts vom Kurs: { grp: 'own' | 'exp', head, html: id => '…' } */
 const LIST_COLS = [
@@ -471,14 +478,24 @@ const LIST_COLS = [
   { grp: 'own', head: '12 M.', html: id => fcCell(id, '12m', '12 Monate') },
   { grp: 'exp', head: 'Exp.', cls: 'exp', html: id => {
     const xs = expertList(id); if (!xs.length) return '<span class="na">–</span>';
-    return xs.slice(0, 2).map((x, i) => `<span class="${i ? 'x2 ' : ''}${chgCls(x.pct)}t" title="${esc(expertTip(x))}">${i ? esc(x.short) + ' ' : ''}${cpct(x.pct)}</span>`).join('');
+    return xs.slice(0, 2).map((x, i) => `<span class="${i ? 'x2 ' : ''}${chgCls(x.pct)}t" title="${esc(expertTip(x))}">${i ? esc(x.short) + ' ' : ''}${cpx(x.target)}</span>`).join('');
   } },
 ];
 const activeCols = () => LIST_COLS.filter(c => prefs.cols === 'all' || prefs.cols === c.grp);
+const CCY_SYM = { USD: '$', EUR: '€', GBP: '£', GBX: 'p', GBp: 'p', JPY: '¥', CNY: '¥', CHF: 'CHF', HKD: 'HK$', CAD: 'C$', AUD: 'A$', SEK: 'kr', NOK: 'kr', DKK: 'kr', KRW: '₩', INR: '₹', TWD: 'NT$', ILS: '₪', ILA: 'ag.', ZAR: 'R', ZAC: 'c' };
+/** Währungszeichen der Handelswährung (Indizes: Punkte) */
+const ccySym = id => (isIndex(id) ? 'Pkt.' : CCY_SYM[meta(id).currency] || meta(id).currency || '');
 function pill(id) {
   const c = dayChange(id);
-  const txt = !c ? '–' : prefs.pill === 'abs' ? sgn(c.abs) : pct(c.pct);
-  return `<span class="pill ${chgCls(c?.pct)}" title="Veränderung gegenüber Vortagesschluss${c && !c.live ? ' (letzter erfasster Stand)' : ''}\nGrün > +1 %, Rot < −1 %">${txt}</span>`;
+  const abs = prefs.pill === 'abs';
+  const txt = !c ? '–' : abs ? (ok(c.abs) ? `${sgn(c.abs)} ${ccySym(id)}` : '–') : pct(c.pct);
+  const other = !c ? '' : abs ? pct(c.pct) : ok(c.abs) ? `${sgn(c.abs)} ${ccySym(id)}` : '';
+  return `<span class="pill ${chgCls(c?.pct)}" role="button" tabindex="0" data-pilltgl="1" aria-label="Tagesveränderung ${esc(txt)}, antippen für ${abs ? 'Prozent' : 'Betrag'}" title="Veränderung gegenüber Vortagesschluss: ${esc(txt)}${other ? ' (' + esc(other) + ')' : ''}${c && !c.live ? ' – letzter erfasster Stand' : ''}\nKlick: alle auf ${abs ? 'Prozent' : 'Betrag'} umschalten · Grün > +1 %, Rot < −1 %">${txt}</span>`;
+}
+function togglePill(e) {
+  e.preventDefault(); e.stopPropagation();
+  prefs.pill = prefs.pill === 'abs' ? 'pct' : 'abs'; savePrefs();
+  renderSidebar();
 }
 function renderSidebar() {
   const list = $('list');
@@ -486,7 +503,7 @@ function renderSidebar() {
   const items = orderedItems().filter(it => !q || symOf(it.id).toLowerCase().includes(q) || itemName(it).toLowerCase().includes(q) || it.id.toLowerCase().includes(q));
   const cols = activeCols();
   document.body.dataset.cols = cols.length;
-  let h = cols.length ? `<li class="colhdr"><div class="nm"></div><span class="spk"></span><div class="px">Kurs</div>${cols.map(c => `<div class="xc ${c.grp}" title="${c.grp === 'own' ? 'Eigene Prognose (Schätzung, keine Anlageberatung): Veränderung ggü. aktuellem Kurs' : 'Experten: Analystenkonsens 12 Mt. (TradingView), darunter veröffentlichte Kursziele (z. B. ARK Invest). Quelle und Datum im Tooltip.'}">${c.head}</div>`).join('')}<span class="ib sp"></span></li>` : '';
+  let h = cols.length ? `<li class="colhdr"><div class="nm"></div><span class="spk"></span><div class="px">Kurs</div>${cols.map(c => `<div class="xc ${c.grp}" title="${c.grp === 'own' ? 'Eigene Prognose: erwarteter Kurs in Handelswährung (Schätzung, keine Anlageberatung). Grün/Rot: über/unter aktuellem Kurs (±1 %), Abweichung im Tooltip' : 'Experten-Kursziel in Handelswährung: Analystenkonsens 12 Mt. (TradingView), darunter veröffentlichte Kursziele (z. B. ARK Invest). Quelle, Datum und Abweichung im Tooltip.'}">${c.head}</div>`).join('')}<span class="ib sp"></span></li>` : '';
   let lastCat = null;
   const drag = prefs.sort === 'manual' && !q;
   for (const it of items) {
@@ -495,11 +512,16 @@ function renderSidebar() {
     h += `<li class="st${selected === it.id ? ' sel' : ''}" data-id="${esc(it.id)}" data-pop="${esc(it.id)}"${drag ? ' draggable="true"' : ''}>
       <div class="nm"><b>${esc(symOf(it.id))}</b><small>${esc(itemName(it))}</small></div>
       ${sparkSvg(it.id, 44, 20)}
-      <div class="px"><span class="v">${p ? p2(p.v) : '–'}</span>${pill(it.id).replace(/ title="[^"]*"/, '')}</div>${cols.map(c => `<div class="xc ${c.cls || ''}">${c.html(it.id)}</div>`).join('')}${infoBtn(it.id)}</li>`;
+      <div class="px"><span class="v">${p ? p2(p.v) : '–'}</span>${pill(it.id)}</div>${cols.map(c => `<div class="xc ${c.cls || ''}">${c.html(it.id)}</div>`).join('')}${infoBtn(it.id)}</li>`;
   }
   if (!items.length) h += `<li class="empty">${q ? 'Kein Treffer in der Watchlist.' : 'Watchlist leer'}</li>`;
   list.innerHTML = h;
   list.querySelectorAll('li[data-id]').forEach(li => li.onclick = () => select(li.dataset.id));
+  list.querySelectorAll('[data-pilltgl]').forEach(p => {
+    p.onclick = togglePill;
+    p.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') togglePill(e); };
+    p.onpointerdown = e => e.stopPropagation(); // kein Langdruck-Popover / Ziehen auf der Pille
+  });
   $('sort').value = prefs.sort; $('sparkSel').value = prefs.spark; $('colSel').value = prefs.cols;
   popRefresh();
   if (drag) {

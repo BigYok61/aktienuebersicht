@@ -288,3 +288,5 @@ body[data-cols="4"] #app { grid-template-columns: 540px 1fr; }
   .list .xc { flex-basis: 42px; font-size: 11px; } .list .xc.exp { flex-basis: 48px; }
   .list .px { min-width: 66px; } .list .pill { min-width: 56px; font-size: 11px; }
 }
+.list .pill { cursor: pointer; white-space: nowrap; user-select: none; -webkit-user-select: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.list .pill:hover { filter: brightness(1.08); } .list .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
