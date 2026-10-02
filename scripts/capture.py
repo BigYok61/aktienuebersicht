@@ -449,7 +449,8 @@ def main():
                 pass
         daily.sort()
         # Tagesschluss ergaenzt um Tage, die in den Tageskerzen (noch) fehlen (CNBC-Indizes hinken teils 1 Tag nach)
-        daily_x = with_intraday_closes(daily, intraday, today)
+        offp = official_prev(cq.get(sym) or {}) if cq else None
+        daily_x = with_intraday_closes(daily, intraday, today, official=offp)
         added = date.fromisoformat(it.get("added") or START_DAY.isoformat())
         for d in days:
             key = d.isoformat()
@@ -487,7 +488,7 @@ def main():
                     del pv[sid]   # Vortagesschluss ist abgeleitet (kein Messwert) -> darf korrigiert werden
                 changed += put(pv, sid, prev[-1][4])
         try:
-            build_chart(charts, sid, sym, intraday, daily_raw, today, errors)
+            build_chart(charts, sid, sym, intraday, daily_raw, today, errors, offp)
         except Exception as e:  # noqa
             errors.append(f"Chart {tag(sid)}: {type(e).__name__}")
         meta["added"] = added.isoformat()
@@ -657,8 +658,18 @@ def load_charts(ring):
     return base
 
 
-def with_intraday_closes(daily, intraday, today, as_int=False):
-    """Fehlende abgeschlossene Handelstage (vor heute) mit der letzten Intraday-Kerze des Tages ergaenzen."""
+def official_prev(x):
+    """(Handelstag YYYYMMDD des letzten Kurses, offizieller Vortagesschluss) aus dem CNBC-Quote, sonst None."""
+    try:
+        return x["last_time"][:10].replace("-", ""), float(str(x["previous_day_closing"]).replace(",", ""))
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def with_intraday_closes(daily, intraday, today, as_int=False, official=None):
+    """Fehlende abgeschlossene Handelstage (vor heute) mit der letzten Intraday-Kerze des Tages ergaenzen.
+    Die Intraday-Kerzen enthalten den nachboerslichen Handel; fuer den letzten Tag vor dem aktuellen Handelstag
+    wird deshalb der offizielle Vortagesschluss aus dem Quote verwendet (official = (Tag, Wert))."""
     have = {(str(x[0]) if as_int else x[0].strftime("%Y%m%d")) for x in daily}
     lastb = {}
     for b in intraday:
@@ -672,10 +683,16 @@ def with_intraday_closes(daily, intraday, today, as_int=False):
             add.append([int(ds), sig(b[4]), 0])
         else:
             add.append((date(int(ds[:4]), int(ds[4:6]), int(ds[6:8])), b[1], b[2], b[3], b[4]))
+    if add and official:
+        add.sort()
+        k = max((j for j, a in enumerate(add) if (str(a[0]) if as_int else a[0].strftime("%Y%m%d")) < official[0]), default=None)
+        if k is not None:
+            a = add[k]
+            add[k] = [a[0], sig(official[1]), 0] if as_int else (a[0], a[1], a[2], a[3], official[1])
     return sorted(list(daily) + add) if add else daily
 
 
-def build_chart(charts, sid, sym, intraday, daily_raw, today, errors):
+def build_chart(charts, sid, sym, intraday, daily_raw, today, errors, official=None):
     e = charts["s"].setdefault(sid, {})
     # Intraday: letzter Handelstag in 5-Min.-Kerzen, die 4 Tage davor in 30-Min.-Kerzen (Zeit: Epoch-Minuten)
     # Nur Tage mit mind. 6 Kerzen (30 Min.) zaehlen: einzelne Vorboersen-/Eroeffnungskerzen (v. a. bei Indizes)
@@ -705,7 +722,7 @@ def build_chart(charts, sid, sym, intraday, daily_raw, today, errors):
     e["iDay"] = last
     dl = [[int(b[5]), sig(b[4]), b[6]] for b in daily_raw if b[5] and b[5][:8].isdigit()]
     dl.sort()
-    dl = with_intraday_closes(dl, intraday, today, as_int=True)
+    dl = with_intraday_closes(dl, intraday, today, as_int=True, official=official)
     e["d"] = dl[-560:]   # ca. 2 Jahre + YTD
     prev = [x for x in dl if last and str(x[0]) < last]
     e["pc"] = prev[-1][1] if prev else None
