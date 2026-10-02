@@ -802,6 +802,11 @@ function wirePopover() {
     if (pop.el && pop.el.contains(e.target)) { clearTimeout(pop.hideT); return; }
     const row = rowOf(e.target);
     if (!row) return;
+    // Liste: nur über Ticker/Name oder Kurs/Pill öffnen; Prognose-/Expertenspalten (eigene Tooltips) und Sparkline schliessen
+    if (row.closest('#list') && e.target !== row && !e.target.closest('.nm, .px')) {
+      clearTimeout(pop.showT); if (!pop.pinned && pop.el && !pop.el.hidden) popHideSoon(); return;
+    }
+    if (row.closest('#list') && e.target === row) return; // Zwischenraum: Zustand beibehalten
     if (pop.pinned && pop.anchor === row) return;
     clearTimeout(pop.hideT);
     if (pop.anchor === row && !pop.el.hidden) return;
