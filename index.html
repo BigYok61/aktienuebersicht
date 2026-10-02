@@ -50,23 +50,11 @@
   <div class="sbfoot"><span id="stand">Lade …</span> · <span id="updated"></span><br><a href="#" id="csv">CSV</a> · <a href="#" id="logout">Abmelden</a></div>
 </aside>
 <div id="main">
-  <div class="toolbar"><button class="back" id="backOv" type="button">‹ Liste</button><span class="sp"></span><button id="viewTgl" type="button" title="Zwischen Detail und Übersicht/Tabelle wechseln">Übersicht</button></div>
+  <div class="toolbar"><button class="back" id="backOv" type="button">‹ Liste</button><span class="sp"></span></div>
   <div id="error" class="error" hidden></div>
   <section id="editor" class="panel" hidden></section>
-  <section id="detail" hidden></section>
-  <section id="overview">
-    <h1 class="ovh">Übersicht</h1>
-    <p class="note">Kurse werktags um 09, 12, 15, 18 und 22 Uhr Schweizer Zeit in der Handelswährung, Veränderung gegenüber 09:00. „Heute“: gegenüber Vortagesschluss (grün &gt; +1 %, rot &lt; −1 %). „Jetzt“: aktueller Kurs (bis 15 Min. verzögert), überschreibt keine Zeitpunkt-Werte.</p>
-    <p class="note purple">* Prognosen (Tagesende, 7 Tage, 3 Monate, 12 Monate), jeweils um 09:00 erstellt: Schätzung, keine Anlageberatung.</p>
-    <label class="chk small"><input id="showFc" type="checkbox" checked> Prognosen anzeigen</label>
-    <div id="pcharts" class="pcharts"></div>
-    <div class="scroller" id="scroller"><table id="grid" aria-label="Kursübersicht"></table></div>
-    <section class="news">
-      <div class="newshead"><h2>News <span class="sub" id="newsInfo"></span></h2><select id="newsFilter" aria-label="News filtern"></select></div>
-      <div id="newsList"></div>
-    </section>
-    <p class="small">Quellen: CNBC (Kurse, Charts, Devisen, Dividenden), TradingView (Jetzt-Kurse, Kennzahlen, Termine, Kursziele, Suche), Google News, EZB via Frankfurter. Kurse verzögert, ohne Gewähr.</p>
-  </section>
+  <section id="detail"></section>
+  <section id="emptyMain" class="panel" hidden><p class="sub">Die Watchlist ist leer. Titel unter „Bearbeiten“ hinzufügen.</p></section>
 </div>
 </div>
 

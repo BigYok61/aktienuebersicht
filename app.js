@@ -117,7 +117,7 @@ let live = { q: {}, fx: {}, time: null, ok: false };
 let selected = null; // null = Übersicht
 let range = '1T';
 let searchQ = '';
-const prefs = Object.assign({ sort: 'cat', order: [], showFc: true, newsFilter: '', heute: 'pct', spark: '1T', range: '1T', sel: '__overview' },
+const prefs = Object.assign({ sort: 'cat', order: [], showFc: true, newsFilter: '', heute: 'pct', spark: '1T', range: '1T', sel: '' },
   JSON.parse(localStorage.getItem(LS.prefs) || '{}'));
 const savePrefs = () => localStorage.setItem(LS.prefs, JSON.stringify(prefs));
 let portfolio = loadPortfolio();
@@ -429,6 +429,8 @@ function wireChart() {
 }
 
 // ---------------------------------------------------------------- Seitenleiste
+/** Zusatzspalten in der Liste neben dem Kurs (Platzhalter, noch nicht festgelegt): { cls, html: id => '…' } */
+const LIST_COLS = [];
 function pill(id) {
   const c = dayChange(id);
   const txt = !c ? '–' : prefs.pill === 'abs' ? sgn(c.abs) : pct(c.pct);
@@ -438,22 +440,22 @@ function renderSidebar() {
   const list = $('list');
   const q = searchQ.trim().toLowerCase();
   const items = orderedItems().filter(it => !q || symOf(it.id).toLowerCase().includes(q) || itemName(it).toLowerCase().includes(q) || it.id.toLowerCase().includes(q));
-  let h = `<li class="ov${selected == null ? ' sel' : ''}" data-ov="1"><span class="ovicon">▦</span><div class="nm"><b>Übersicht/Tabelle</b><small>Zeitpunkte, Depot, alle News</small></div></li>`;
+  let h = '';
   let lastCat = null;
   const drag = prefs.sort === 'manual' && !q;
   for (const it of items) {
     if (prefs.sort === 'cat' && catOf(it) !== lastCat) { lastCat = catOf(it); h += `<li class="cat">${esc(lastCat)}</li>`; }
     const p = nowPrice(it.id);
-    h += `<li class="st${selected === it.id ? ' sel' : ''}" data-id="${esc(it.id)}"${drag ? ' draggable="true"' : ''}>
+    h += `<li class="st${selected === it.id ? ' sel' : ''}" data-id="${esc(it.id)}" data-pop="${esc(it.id)}"${drag ? ' draggable="true"' : ''}>
       <div class="nm"><b>${esc(symOf(it.id))}</b><small>${esc(itemName(it))}</small></div>
-      ${sparkSvg(it.id)}
-      <div class="px"><span class="v">${p ? p2(p.v) : '–'}</span>${pill(it.id)}</div></li>`;
+      ${sparkSvg(it.id, 44, 20)}${LIST_COLS.map(c => `<div class="xc ${c.cls || ''}">${c.html(it.id)}</div>`).join('')}
+      <div class="px"><span class="v">${p ? p2(p.v) : '–'}</span>${pill(it.id).replace(/ title="[^"]*"/, '')}</div>${infoBtn(it.id)}</li>`;
   }
   if (!items.length) h += `<li class="empty">${q ? 'Kein Treffer in der Watchlist.' : 'Watchlist leer'}</li>`;
   list.innerHTML = h;
   list.querySelectorAll('li[data-id]').forEach(li => li.onclick = () => select(li.dataset.id));
-  list.querySelector('li[data-ov]').onclick = () => select(null);
   $('sort').value = prefs.sort; $('sparkSel').value = prefs.spark;
+  popRefresh();
   if (drag) {
     let dragId = null;
     list.querySelectorAll('li[draggable]').forEach(li => {
@@ -469,7 +471,8 @@ function renderSidebar() {
   }
 }
 function select(id) {
-  selected = id; prefs.sel = id ?? '__overview'; savePrefs();
+  popHide();
+  selected = id; prefs.sel = id; savePrefs();
   document.body.classList.add('show-main');
   render();
   $('main').scrollTop = 0; if (window.matchMedia('(max-width: 760px)').matches) window.scrollTo(0, 0);
@@ -553,168 +556,189 @@ function newsCard(a) {
   return `<a class="nc" href="${esc(a.link)}" target="_blank" rel="noopener noreferrer"><span class="src">${esc(a.source || '–')}</span><b>${esc(a.title)}</b>${snip}<span class="age" title="${esc(timeFmt.format(new Date(a.time)))}">${ageText(a.time)}</span></a>`;
 }
 
-// ---------------------------------------------------------------- Übersicht (Tabelle)
-function arrowFor(d, eps) { return d > eps ? '<span class="arr up">▲</span>' : d < -eps ? '<span class="arr down">▼</span>' : '<span class="arr flat">–</span>'; }
-function heuteCell(id) {
-  const c = dayChange(id);
-  if (!c) return '<td class="heute empty">–</td>';
-  const txt = prefs.heute === 'abs' ? sgn(c.abs) : pct(c.pct);
-  return `<td class="heute ${chgCls(c.pct)}" title="Veränderung gegenüber Vortagesschluss: ${esc(sgn(c.abs))} ${esc(ccyLabel(id))} (${esc(pct(c.pct))})${c.live ? '' : '\nletzter erfasster Stand'}">${txt}</td>`;
+// ---------------------------------------------------------------- Info-Popover (Liste + Übersicht)
+const infoBtn = id => `<button type="button" class="ib" data-popbtn="${esc(id)}" aria-label="Details anzeigen" tabindex="-1">i</button>`;
+/** Prognosen: jüngste Prognose je Horizont und jüngster Ist-Vergleich (wie im Detail) */
+function fcSummary(id) {
+  return FC.map(f => {
+    const ks = Object.keys(quotes.days || {}).filter(k => fcOf(id, k, f.k) != null).sort();
+    const kLast = ks[ks.length - 1];
+    const kDone = [...ks].reverse().find(k => actualOf(id, k, f.k));
+    const v = kLast ? fcOf(id, kLast, f.k) : null, b = kLast ? val(id, kLast, HOURS[0]) : null;
+    const a = kDone ? actualOf(id, kDone, f.k) : null, pv = kDone ? fcOf(id, kDone, f.k) : null;
+    return { f, v, b, target: kLast ? targetOf(kLast, f.k) : null, a, pv, kDone };
+  }).filter(x => x.v != null || x.a);
 }
-function renderOverview() {
+function popHtml(id) {
+  const it = itemOf(id), m = meta(id), s = stats(id), c = dayChange(id), p = nowPrice(id), idx = isIndex(id), l = live.q[id] || {};
+  const pick = (a, b) => (a != null ? a : b);
+  const kv = (k, v, cls = '', wide = false) => (v == null || v === '–' || v === '' ? '' : `<div class="pkv${wide ? ' w' : ''}"><span>${k}</span><b${cls ? ` class="${cls}"` : ''}>${v}</b></div>`);
+  const grp = (title, body, extra = '') => (body ? `<section><h4>${title}${extra}</h4>${body}</section>` : '');
+  const ex = EXCH_NAME[m.exchange] || m.exchange || id.split(':')[0];
+  let h = `<header><div><b>${esc(symOf(id))}</b> <span class="pn">${esc(m.longName || itemName(it))}</span><div class="psub">${esc(ex)} · ${esc(ccyLabel(id))} · ${esc(catOf(it))}</div></div>
+    <div class="pp"><b>${p ? p2(p.v) : '–'}</b><span class="${chgCls(c?.pct)}t">${c ? `${sgn(c.abs)} (${pct(c.pct)})` : ''}</span></div></header>`;
+  // Kennzahlen
+  const dist = p && s.h52 ? (p.v / s.h52 - 1) * 100 : null;
+  h += grp('Kennzahlen', `<div class="pgrid">${[
+    kv('Eröffnung', p2(pick(l.open, s.open))), kv('Hoch', p2(pick(l.high, s.high))), kv('Tief', p2(pick(l.low, s.low))),
+    kv('Vol.', big(pick(l.volume, s.volume))), kv('Ø-Vol.', big(s.avgVol)),
+    idx ? '' : kv('Marktkap.', s.mcap ? big(s.mcap) + (s.mcapCcy ? ' ' + esc(s.mcapCcy) : '') : null), idx || !s.mcapChf || s.mcapCcy === 'CHF' ? '' : kv('Marktk. CHF', 'ca. ' + big(s.mcapChf)),
+    kv('52W-H', p2(s.h52)), kv('52W-T', p2(s.l52)), kv('Abst. 52W-H', ok(dist) ? pct(dist) : null, dist < -20 ? 'downt' : ''),
+    kv('KGV', p2(s.pe)), kv('EPS', p2(s.eps)), kv('Beta', p2(s.beta))].join('')}</div>`);
+  // Zeitpunkte heute (bzw. letzter Tag mit Werten)
   const today = zurichToday();
-  const days = weekdayKeys(START, today < START ? START : today);
-  for (const k of Object.keys(quotes.days || {})) if (k >= START && !days.includes(k) && k <= addDays(today, 1)) days.push(k);
-  days.sort();
-  const tail = '<td class="heute"></td><td class="now"></td><td class="mc"></td><td class="val"></td>';
-  const td = (k, html, cls = '', title = '') => `<td class="${k === today ? 'today ' : ''}${cls}"${title ? ` title="${esc(title)}"` : ''}>${html}</td>`;
-  const blanks = (cls = '') => days.map(k => td(k, '', cls)).join('');
-  const liveHead = live.ok && live.time ? `Jetzt ${hmFmt.format(live.time)}` : 'Jetzt';
-  let h = '<thead><tr><th class="lab">Zeit (CH)</th>' + days.map(k => `<th class="${k === today ? 'today' : ''}">${header(k)}</th>`).join('') +
-    `<th class="heute"><button id="heuteTgl" class="tgl" title="Umschalten: Prozent / Betrag (Handelswährung)">Heute ${prefs.heute === 'abs' ? 'Betrag' : '%'}</button></th>` +
-    `<th class="now" title="${live.ok ? 'Aktueller Kurs (TradingView, bis 15 Min. verzögert), abgerufen ' + timeFmt.format(live.time) : 'Kein Live-Kurs verfügbar: letzter erfasster Wert'}">${liveHead}</th><th class="mc" title="Marktkapitalisierung in Handelswährung">Marktwert</th><th class="val">Wert CHF</th></tr></thead><tbody>`;
-  const held = (watch.items || []).filter(it => lotsOf(it.id).length);
-  if (held.length) {
-    let tv = 0, tc = 0, okv = true, okc = true, allLive = true, dayChf = 0;
-    for (const it of held) { const x = holding(it.id); if (x.value == null) okv = false; else tv += x.value; if (x.costChf == null) okc = false; else tc += x.costChf; if (!x.live) allLive = false; dayChf += x.dayChf || 0; }
-    h += `<tr class="sect"><th class="lab">Depot (CHF)</th>${blanks()}${tail}</tr>`;
-    HOURS.forEach((hr, i) => {
-      h += `<tr class="${i % 2 ? 'alt' : ''}"><th class="lab">Depotwert ${pad(hr)}:00</th>` + days.map(k => { const v = slotValueChf(k, hr); return td(k, v == null ? '–' : p2(v), v == null ? 'empty' : '', v == null ? '' : 'Bestand × Kurs × Devisenkurs zum Zeitpunkt'); }).join('') + tail + '</tr>';
-    });
-    const g = okv && okc ? tv - tc : null;
-    h += `<tr class="total"><th class="lab">Total Depot</th>${blanks()}<td class="heute ${lineCls(dayChf)}">${sgn(dayChf)} CHF</td><td class="now"></td><td class="mc"></td><td class="val${allLive ? '' : ' fallback'}" title="${esc(`Einstand CHF: ${okc ? p2(tc) : 'unvollständig'}\nGewinn/Verlust: ${sgn(g)} CHF (${pct(g != null && tc ? (tv / tc - 1) * 100 : null)})`)}">${okv ? p2(tv) : '–'}<br><span class="pct ${lineCls(g)}t">${sgn(g)} (${pct(g != null && tc ? (tv / tc - 1) * 100 : null)})</span></td></tr>`;
+  const dk = HOURS.some(hr => val(id, today, hr) != null) ? today : Object.keys(quotes.days || {}).sort().reverse().find(k => HOURS.some(hr => val(id, k, hr) != null));
+  if (dk) {
+    const b = val(id, dk, HOURS[0]);
+    const cells = HOURS.map(hr => { const v = val(id, dk, hr); const d = v != null && b != null && hr !== HOURS[0] ? v - b : null;
+      return `<div><span>${pad(hr)}:00</span><b class="${d == null ? '' : lineCls(d) + 't'}">${v == null ? '–' : p2(v)}</b></div>`; }).join('');
+    const cl = closeOf(id, dk);
+    h += grp(`Zeitpunkte <small>${dk === today ? 'heute' : header(dk)} · CH-Zeit</small>`, `<div class="pslots">${cells}<div><span>Schluss</span><b>${cl == null ? '–' : p2(cl)}</b></div></div>`);
   }
-  let lastCat = null;
-  for (const it of orderedItems()) {
-    const id = it.id, m = meta(id), s = stats(id);
-    if (prefs.sort === 'cat' && catOf(it) !== lastCat) { lastCat = catOf(it); h += `<tr class="sect"><th class="lab">${esc(lastCat)}</th>${blanks()}${tail}</tr>`; }
-    const hold = holding(id);
-    const np = nowPrice(id);
-    const base09 = val(id, today, HOURS[0]);
-    const nowTitle = np ? (np.live ? `Aktueller Kurs (TradingView), ${timeFmt.format(np.time)}` : `Kein Live-Kurs: letzter erfasster Wert`) : '';
-    const nowCell = np ? `<td class="now${np.live ? '' : ' fallback'}" title="${esc(nowTitle + (base09 != null ? `\nVeränderung seit 09:00: ${sgn(np.v - base09)} (${pct((np.v / base09 - 1) * 100)})` : ''))}">${p2(np.v)}${np.live ? '' : ' *'}</td>` : '<td class="now empty">–</td>';
-    const valCell = hold ? `<td class="val${hold.live ? '' : ' fallback'}" title="${esc(`Anzahl ${nf0.format(hold.qty)} · Ø Kaufpreis ${p2(hold.avg)} ${m.currency || ''}\nEinstand CHF: ${p2(hold.costChf)}\nGewinn/Verlust: ${sgn(hold.gain)} CHF (${pct(hold.gainPct)})`)}">${p2(hold.value)}</td>` : '<td class="val"></td>';
-    const mcCell = `<td class="mc" title="${s.mcapChf ? 'ca. ' + esc(big(s.mcapChf)) + ' CHF' : ''}">${isIndex(id) || !s.mcap ? '' : esc(big(s.mcap)) + ' <small>' + esc(s.mcapCcy || '') + '</small>'}</td>`;
-    h += `<tr class="group"><th class="lab"><a href="#" data-open="${esc(id)}" title="${esc(`${m.longName || itemName(it)} · ${id}${m.exchange ? ' · ' + m.exchange : ''} · Kategorie: ${catOf(it)}`)}">${esc(itemName(it))}</a><span class="tick">${esc(symOf(id))} · ${esc(ccyLabel(id))}</span>${sparkSvg(id, 70, 22)}</th>${blanks()}${heuteCell(id)}${nowCell}${mcCell}${valCell}</tr>`;
-    const infos = [divHtml(id), targetHtml(id), w52Html(id), earningsHtml(id)].filter(Boolean);
-    const holdLine = hold ? `<br><span class="k">Anzahl:</span> ${nf0.format(hold.qty)} · <span class="k">Ø Kauf:</span> ${p2(hold.avg)}` : '';
-    if (infos.length || hold) {
-      h += `<tr class="info"><th class="lab">${infos.join('<br>')}${holdLine}</th>${blanks()}<td class="heute"></td><td class="now"></td><td class="mc"></td>` +
-        (hold ? `<td class="val"><span class="${lineCls(hold.gain)}t">${sgn(hold.gain)}<br>${pct(hold.gainPct)}</span></td>` : '<td class="val"></td>') + '</tr>';
-    }
-    const slotRow = (hr, alt) => {
-      let row = `<tr class="${alt ? 'alt' : ''}"><th class="lab">${pad(hr)}:00</th>`;
-      for (const k of days) {
-        const v = val(id, k, hr), b = val(id, k, HOURS[0]);
-        let arrow = '', title = '';
-        if (v != null && b != null && hr !== HOURS[0]) { const d = v - b; arrow = arrowFor(d, Math.abs(b) * 1e-5); title = `Veränderung seit 09:00: ${sgn(d)} ${ccyLabel(id)} (${pct((v / b - 1) * 100)})`; }
-        row += td(k, v == null ? '–' : arrow + p2(v), v == null ? 'empty' : '', title);
-      }
-      return row + tail + '</tr>';
-    };
-    h += slotRow(HOURS[0], false);
-    if (prefs.showFc) {
-      for (const f of FC) {
-        h += `<tr class="fc"><th class="lab" title="${DISCLAIMER}">${f.label} *</th>`;
-        for (const k of days) {
-          const v = fcOf(id, k, f.k), b = val(id, k, HOURS[0]);
-          let arrow = ''; if (v != null && b != null) { const d = v - b; arrow = `<span class="fcarr">${d > Math.abs(b) * 1e-5 ? '↑' : d < -Math.abs(b) * 1e-5 ? '↓' : '→'}</span>`; }
-          h += td(k, v == null ? '–' : arrow + p2(v), v == null ? 'empty' : '', v == null ? '' : `${DISCLAIMER}\nZiel: Schlusskurs ${f.k === '1d' ? header(k) : dmy(targetOf(k, f.k))}\nBasis 09:00: ${p2(b)}${b ? ` (${pct((v / b - 1) * 100)})` : ''}`);
-        }
-        h += tail + '</tr>';
-      }
-      for (const f of FC) {
-        h += `<tr class="dev"><th class="lab">Abweichung ${f.short}</th>`;
-        for (const k of days) {
-          const v = fcOf(id, k, f.k);
-          if (v == null) { h += td(k, '–', 'empty'); continue; }
-          const a = actualOf(id, k, f.k);
-          if (a) { const d = a.v - v; h += td(k, sgn(d), '', `Ist (Schlusskurs ${dmy(a.day)}): ${p2(a.v)} · Prognose: ${p2(v)} · Abweichung ${pct((a.v / v - 1) * 100)}`); }
-          else h += td(k, f.k === '1d' ? '→ Schluss' : `→ ${dmyShort(targetOf(k, f.k))}`, 'empty pending', `Ist-Wert ab ${dmy(targetOf(k, f.k))} (Schlusskurs)`);
-        }
-        h += tail + '</tr>';
-      }
-    }
-    HOURS.slice(1).forEach((hr, i) => { h += slotRow(hr, i % 2 === 0); });
-    h += `<tr class="dev"><th class="lab">Schlusskurs</th>${days.map(k => { const c = closeOf(id, k); return td(k, c == null ? '–' : p2(c), c == null ? 'empty' : ''); }).join('')}${tail}</tr>`;
+  // Prognosen
+  const fcs = fcSummary(id);
+  if (fcs.length) {
+    h += grp(`Prognosen <small>${DISCLAIMER}</small>`, `<table class="pfc"><thead><tr><th></th><th>Prognose</th><th>Ziel</th><th>Ist (Abw.)</th></tr></thead><tbody>${fcs.map(x =>
+      `<tr><th>${x.f.short}</th><td>${x.v != null ? p2(x.v) : '–'}${x.v != null && x.b ? ` <small class="${lineCls(x.v - x.b)}t">${pct((x.v / x.b - 1) * 100)}</small>` : ''}</td><td>${x.target ? dmyShort(x.target) : '–'}</td>` +
+      `<td>${x.a ? `${p2(x.a.v)} <small class="${chgCls((x.a.v / x.pv - 1) * 100)}t">${pct((x.a.v / x.pv - 1) * 100)}</small>` : '<span class="psub">offen</span>'}</td></tr>`).join('')}</tbody></table>`);
   }
-  if (!(watch.items || []).length) h += `<tr><th class="lab">Watchlist leer</th>${blanks()}${tail}</tr>`;
-  $('grid').innerHTML = h + '</tbody>';
-  const sc = $('scroller'); sc.scrollLeft = sc.scrollWidth;
-  $('heuteTgl').onclick = () => { prefs.heute = prefs.heute === 'abs' ? 'pct' : 'abs'; savePrefs(); renderOverview(); };
-  $('grid').querySelectorAll('[data-open]').forEach(a => a.onclick = e => { e.preventDefault(); select(a.dataset.open); });
-  $('showFc').checked = prefs.showFc;
-  renderPortfolioCharts();
-  renderNewsAll();
+  // Analysten
+  const ti = targetInfo(id);
+  if (ti) h += grp('Analysten', ti.mean == null ? '<p class="psub">Kein Kursziel verfügbar.</p>' : `<div class="pgrid">${kv('Kursziel 12 Mt.', p2(ti.mean) + (ti.t.currency ? ' ' + esc(ti.t.currency) : ''))}${kv('Potenzial', pct(ti.up), chgCls(ti.up) + 't')}${ti.t.count ? kv('Analysten', String(ti.t.count)) : ''}${ti.t.low != null ? kv('Spanne', `${p2(ti.t.low)} – ${p2(ti.t.high)}`) : ''}</div>`);
+  // Dividende / Termine
+  if (!idx) {
+    const d = quotes.dividends?.[id], dv = divInfo(id), ccy = esc(m.currency || '');
+    let body = '';
+    if (dv && dv.yield !== undefined) {
+      body += kv('Dividende/Jahr', d.annual != null ? `${p2(d.annual)} ${ccy}` : '–') + kv('Rendite', ok(dv.yield) ? nf2.format(dv.yield) + ' %' : '–');
+      body += kv('Ex-Tag', d.nextEx ? dmyShort(d.nextEx) + (d.nextEstimated ? ' (gesch.)' : '') : '–') + kv('Zahltag', d.nextPay ? dmyShort(d.nextPay) + (d.nextEstimated ? ' (gesch.)' : '') : '–');
+      if (d.nextAmount) body += kv('Betrag', `${p2(d.nextAmount)} ${ccy}`);
+    } else body += kv('Dividende', dv ? esc(dv.text) : '–');
+    body += kv('Quartalszahlen', s.earningsNext ? dmyShort(s.earningsNext) : '–');
+    h += grp('Dividende &amp; Termine', `<div class="pgrid">${body}</div>`);
+  }
+  // Mein Bestand
+  const hold = holding(id);
+  if (hold) h += grp('Mein Bestand', `<div class="pgrid">${kv('Anzahl', nf0.format(hold.qty))}${kv('Ø Kaufpreis', p2(hold.avg))}${kv('Einstand CHF', p2(hold.costChf))}${kv('Wert CHF', p2(hold.value))}${kv('Heute CHF', sgn(hold.dayChf), lineCls(hold.dayChf) + 't')}${kv('G/V CHF', `${sgn(hold.gain)} (${pct(hold.gainPct)})`, lineCls(hold.gain) + 't')}</div>`, ' <small>nur auf diesem Gerät</small>');
+  return h;
 }
-
-// ---------------------------------------------------------------- Depot-Grafiken
-const PALETTE = ['#0a84ff', '#30d158', '#ff9f0a', '#bf5af2', '#ff375f', '#64d2ff', '#ffd60a', '#ac8e68', '#5e5ce6', '#66d4cf'];
-function donut(parts, title) {
-  const tot = parts.reduce((s, p) => s + p[1], 0); if (!tot) return '';
-  let a0 = -Math.PI / 2, h = '';
-  const R = 52, r = 32, cx = 60, cy = 60;
-  parts.forEach(([lab, v], i) => {
-    const a1 = a0 + (v / tot) * Math.PI * 2; const large = a1 - a0 > Math.PI ? 1 : 0;
-    const P = (rad, a) => `${(cx + rad * Math.cos(a)).toFixed(2)},${(cy + rad * Math.sin(a)).toFixed(2)}`;
-    const d = parts.length === 1 ? `M${cx - R},${cy}a${R},${R} 0 1,0 ${2 * R},0a${R},${R} 0 1,0 ${-2 * R},0M${cx - r},${cy}a${r},${r} 0 1,1 ${2 * r},0a${r},${r} 0 1,1 ${-2 * r},0Z`
-      : `M${P(R, a0)}A${R},${R} 0 ${large} 1 ${P(R, a1)}L${P(r, a1)}A${r},${r} 0 ${large} 0 ${P(r, a0)}Z`;
-    h += `<path d="${d}" fill="${PALETTE[i % PALETTE.length]}" fill-rule="evenodd"><title>${esc(lab)}: ${p2(v)} CHF (${nf2.format(v / tot * 100)} %)</title></path>`;
-    a0 = a1;
+const pop = { el: null, id: null, anchor: null, pinned: false, showT: 0, hideT: 0, html: '', x: null, lp: null, suppressClick: false };
+function popEl() {
+  if (!pop.el) {
+    pop.el = document.createElement('div'); pop.el.id = 'pop'; pop.el.className = 'pop'; pop.el.setAttribute('role', 'tooltip'); pop.el.hidden = true;
+    document.body.appendChild(pop.el);
+    pop.el.addEventListener('pointerenter', () => clearTimeout(pop.hideT));
+    pop.el.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse' && !pop.pinned) popHideSoon(); });
+  }
+  return pop.el;
+}
+function popPlace() {
+  const el = pop.el, a = pop.anchor; if (!el || !a || !a.isConnected) return;
+  const M = 8, vw = document.documentElement.clientWidth, vh = window.innerHeight;
+  el.style.maxHeight = (vh - 2 * M) + 'px';
+  el.style.left = '0px'; el.style.top = '0px';
+  const r = a.getBoundingClientRect(), w = el.offsetWidth, ht = el.offsetHeight;
+  let x, y;
+  if (r.width < vw * 0.45 && (r.right + M + w <= vw - M || r.left - M - w >= M)) { // schmale Zeile (Liste): seitlich daneben
+    x = r.right + M + w <= vw - M ? r.right + M : r.left - M - w;
+    y = r.top - 6;
+  } else { // breite Zeile (Tabelle): darunter, sonst darüber, sonst seitlich neben dem Mauszeiger
+    const cx = pop.x ?? r.left + 40;
+    if (r.bottom + 4 + ht <= vh - M) { x = cx - 40; y = r.bottom + 4; }
+    else if (r.top - 4 - ht >= M) { x = cx - 40; y = r.top - 4 - ht; }
+    else { x = cx + 28 + w <= vw - M ? cx + 28 : cx - 28 - w; y = (r.top + r.bottom) / 2 - ht / 2; }
+  }
+  x = Math.max(M, Math.min(x, vw - M - w)); y = Math.max(M, Math.min(y, vh - M - ht));
+  el.style.left = Math.round(x) + 'px'; el.style.top = Math.round(y) + 'px';
+}
+function popShow(id, anchor, pinned = false) {
+  const el = popEl(); clearTimeout(pop.hideT); clearTimeout(pop.showT);
+  const html = popHtml(id);
+  if (html !== pop.html) { el.innerHTML = html; pop.html = html; el.scrollTop = 0; }
+  const wasHidden = el.hidden;
+  pop.id = id; pop.anchor = anchor; pop.pinned = pinned;
+  el.classList.toggle('pinned', pinned);
+  if (wasHidden) { el.classList.remove('in'); el.hidden = false; }
+  popPlace();
+  if (wasHidden) requestAnimationFrame(() => el.classList.add('in'));
+}
+function popHide() { clearTimeout(pop.showT); clearTimeout(pop.hideT); if (pop.el) { pop.el.hidden = true; pop.el.classList.remove('in'); } pop.id = null; pop.anchor = null; pop.pinned = false; }
+function popHideSoon() { clearTimeout(pop.hideT); pop.hideT = setTimeout(popHide, 180); }
+/** nach dem Neuzeichnen: offenes Popover an die neue Zeile hängen (kein Flackern) */
+function popRefresh() {
+  if (!pop.id || !pop.anchor) return;
+  if (pop.anchor.isConnected) return popPlace();
+  const sel = `[data-pop="${CSS.escape(pop.id)}"]`;
+  const inList = pop.fromList;
+  const n = document.querySelector((inList ? '#list ' : '#main ') + sel);
+  if (!n || n.offsetParent === null) return popHide();
+  pop.anchor = n;
+  const html = popHtml(pop.id); if (html !== pop.html) { pop.el.innerHTML = html; pop.html = html; }
+  popPlace();
+}
+function wirePopover() {
+  const rowOf = t => t?.closest?.('[data-pop]');
+  document.addEventListener('pointerover', e => {
+    if (e.pointerType !== 'mouse') return;
+    if (pop.el && pop.el.contains(e.target)) { clearTimeout(pop.hideT); return; }
+    const row = rowOf(e.target);
+    if (!row) return;
+    if (pop.pinned && pop.anchor === row) return;
+    clearTimeout(pop.hideT);
+    if (pop.anchor === row && !pop.el.hidden) return;
+    clearTimeout(pop.showT);
+    const go = () => { pop.fromList = !!row.closest('#list'); popShow(row.dataset.pop, row); };
+    pop.showT = setTimeout(go, pop.el && !pop.el.hidden ? 90 : 350);
   });
-  const leg = parts.map(([lab, v], i) => `<li><i style="background:${PALETTE[i % PALETTE.length]}"></i>${esc(lab)} <span class="sub">${nf2.format(v / tot * 100)} %</span></li>`).join('');
-  return `<div class="card pie"><h3>${esc(title)}</h3><div class="pierow"><svg viewBox="0 0 120 120" width="120" height="120">${h}</svg><ul>${leg}</ul></div></div>`;
-}
-function renderPortfolioCharts() {
-  const el = $('pcharts');
-  const held = (watch.items || []).filter(it => lotsOf(it.id).length);
-  if (!held.length) { el.innerHTML = '<p class="small">Depot leer – Käufe unter „Depot“ erfassen (nur lokal gespeichert). Dann erscheinen hier Verlauf und Aufteilung.</p>'; return; }
-  const byCat = {}, byCcy = {};
-  for (const it of held) { const x = holding(it.id); if (x.value == null) continue; byCat[catOf(it)] = (byCat[catOf(it)] || 0) + x.value; const c = ccyInfo(meta(it.id).currency)[0]; byCcy[c] = (byCcy[c] || 0) + x.value; }
-  const sorted = o => Object.entries(o).sort((a, b) => b[1] - a[1]);
-  // Verlauf: Depotwert je Zeitpunkt (Werte und Devisenkurse zum Zeitpunkt)
-  const pts = [];
-  for (const k of Object.keys(quotes.days || {}).sort()) for (const hr of HOURS) { const v = slotValueChf(k, hr); if (v != null) pts.push({ k, hr, v }); }
-  let tot = 0; for (const it of held) tot += holding(it.id).value || 0;
-  if (tot) pts.push({ k: 'jetzt', hr: null, v: tot });
-  let line = '<p class="sub">Noch zu wenige Zeitpunkte für einen Verlauf.</p>';
-  if (pts.length >= 2) {
-    const W = 520, H = 150; const vs = pts.map(p => p.v); let lo = Math.min(...vs), hi = Math.max(...vs); const pd = (hi - lo) * 0.1 || hi * 0.01 || 1; lo -= pd; hi += pd;
-    const X = i => 4 + i / (pts.length - 1) * (W - 70), Y = v => 6 + (1 - (v - lo) / (hi - lo)) * (H - 26);
-    const d = pts.map((p, i) => `${i ? 'L' : 'M'}${X(i).toFixed(1)},${Y(p.v).toFixed(1)}`).join('');
-    const cls = lineCls(vs[vs.length - 1] - vs[0]);
-    line = `<svg class="chart ${cls}" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" style="height:150px">` + niceTicks(lo, hi, 3).map(t => `<line class="grid" x1="0" x2="${W - 64}" y1="${Y(t)}" y2="${Y(t)}"/><text class="yl" x="${W - 60}" y="${Y(t) + 4}">${nfi.format(t)}</text>`).join('') +
-      `<path class="area" d="${d}L${X(pts.length - 1)},${H - 20}L${X(0)},${H - 20}Z" fill="url(#gfp)"/><path class="ln" d="${d}"/><defs><linearGradient id="gfp" x1="0" y1="0" x2="0" y2="1"><stop offset="0" class="g0"/><stop offset="1" class="g1"/></linearGradient></defs>` +
-      pts.map((p, i) => `<circle cx="${X(i)}" cy="${Y(p.v)}" r="2.5" class="pdot"><title>${p.k === 'jetzt' ? 'Jetzt' : header(p.k) + ' ' + pad(p.hr) + ':00'}: ${p2(p.v)} CHF</title></circle>`).join('') +
-      `<text class="xl" x="4" y="${H - 4}">${pts[0].k === 'jetzt' ? '' : header(pts[0].k)}</text><text class="xl" x="${W - 110}" y="${H - 4}">jetzt</text></svg>`;
-  }
-  el.innerHTML = `<div class="card wide"><h3>Depotwert CHF <small>${p2(tot)} CHF</small></h3>${line}</div>${donut(sorted(byCat), 'Aufteilung nach Kategorie')}${donut(sorted(byCcy), 'Aufteilung nach Währung')}`;
-}
-
-// ---------------------------------------------------------------- News (Übersicht)
-function renderNewsAll() {
-  const sel = $('newsFilter');
-  const items = orderedItems();
-  sel.innerHTML = '<option value="">Alle Aktien</option>' + items.map(it => `<option value="${esc(it.id)}">${esc(symOf(it.id))} – ${esc(itemName(it))}</option>`).join('');
-  sel.value = items.some(it => it.id === prefs.newsFilter) ? prefs.newsFilter : '';
-  const cutoff = Date.now() - (news.hours || 72) * 3600e3;
-  const ids = new Set(items.map(i => i.id));
-  const arts = (news.articles || []).filter(a => new Date(a.time) >= cutoff && a.stocks.some(s => ids.has(s)) && (!sel.value || a.stocks.includes(sel.value))).slice(0, 120);
-  $('newsList').innerHTML = arts.length ? `<div class="ngrid">${arts.map(a => newsCard(a).replace('</b>', `</b><span class="tags">${a.stocks.filter(s => ids.has(s)).map(s => `<span class="badge">${esc(symOf(s))}</span>`).join('')}</span>`)).join('')}</div>` : '<p class="sub">Keine Artikel aus den letzten 72 Stunden.</p>';
-  $('newsInfo').textContent = news.updated ? `letzte 72 Stunden · ${news.source || 'Google News'} · Stand ${timeFmt.format(new Date(news.updated))}` : '';
+  document.addEventListener('pointermove', e => { if (e.pointerType === 'mouse' && !(pop.el && !pop.el.hidden)) pop.x = e.clientX; }, { passive: true });
+  document.addEventListener('pointerout', e => {
+    if (e.pointerType !== 'mouse' || pop.pinned) return;
+    const row = rowOf(e.target); if (!row) return;
+    const to = e.relatedTarget;
+    if (to && (row.contains(to) || (pop.el && pop.el.contains(to)))) return;
+    if (to && rowOf(to)) return; // zur nächsten Zeile: pointerover übernimmt
+    clearTimeout(pop.showT); popHideSoon();
+  });
+  // Touch: Info-Knopf antippen oder lange drücken
+  document.addEventListener('click', e => {
+    if (pop.suppressClick) { pop.suppressClick = false; e.preventDefault(); e.stopPropagation(); return; }
+    const b = e.target.closest?.('[data-popbtn]');
+    if (b) {
+      e.preventDefault(); e.stopPropagation();
+      const row = b.closest('[data-pop]') || b;
+      if (pop.id === b.dataset.popbtn && pop.pinned) return popHide();
+      pop.fromList = !!row.closest('#list'); pop.x = null; popShow(b.dataset.popbtn, row, true); return;
+    }
+    if (pop.pinned && !(pop.el && pop.el.contains(e.target))) popHide();
+  }, true);
+  document.addEventListener('pointerdown', e => {
+    if (e.pointerType === 'mouse') { if (pop.pinned && !(pop.el && pop.el.contains(e.target)) && !e.target.closest('[data-popbtn]')) popHide(); return; }
+    const row = rowOf(e.target); if (!row || e.target.closest('[data-popbtn]')) return;
+    const sx = e.clientX, sy = e.clientY;
+    clearTimeout(pop.lp);
+    pop.lp = setTimeout(() => { pop.suppressClick = true; pop.fromList = !!row.closest('#list'); pop.x = sx; popShow(row.dataset.pop, row, true); if (navigator.vibrate) navigator.vibrate(10); }, 500);
+    const cancel = ev => { if (ev.type !== 'pointermove' || Math.hypot(ev.clientX - sx, ev.clientY - sy) > 10) { clearTimeout(pop.lp); off(); } };
+    const off = () => ['pointermove', 'pointerup', 'pointercancel'].forEach(t => document.removeEventListener(t, cancel));
+    ['pointermove', 'pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, cancel, { passive: true }));
+  }, { passive: true });
+  document.addEventListener('contextmenu', e => { if (e.target.closest?.('[data-pop]') && (pop.suppressClick || pop.pinned)) e.preventDefault(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') popHide(); });
+  document.addEventListener('scroll', e => { if (pop.el && !pop.el.hidden && !pop.el.contains(e.target)) popHide(); }, true);
+  window.addEventListener('resize', () => popHide());
 }
 
 // ---------------------------------------------------------------- Rendern
 function render() {
   if (selected && !(watch.items || []).some(i => i.id === selected)) selected = null;
   renderSidebar();
-  $('detail').hidden = !selected; $('overview').hidden = !!selected;
-  $('viewTgl').textContent = selected ? 'Übersicht' : 'Detail';
-  if (selected) renderDetail(selected); else renderOverview();
+  if (!selected) selected = orderedItems()[0]?.id ?? null; // keine Übersicht mehr: immer ein Titel im Detail
+  $('detail').hidden = !selected; $('emptyMain').hidden = !!selected;
+  if (selected) renderDetail(selected);
   const upd = quotes.updated ? new Date(quotes.updated) : null;
   $('stand').textContent = upd ? `Stand ${timeFmt.format(upd)}` : 'Noch keine Kursdaten';
   $('updated').textContent = live.ok ? `Jetzt-Kurse ${hmFmt.format(live.time)} (verzögert)` : 'Jetzt-Kurse nicht verfügbar';
   if (editing) renderEditor();
+  popRefresh();
 }
 
 // ---------------------------------------------------------------- Laden
@@ -750,7 +774,7 @@ async function loadCache() {
   } catch { /* ignorieren */ }
 }
 function restoreSelection() {
-  if (selected === null && prefs.sel && prefs.sel !== '__overview' && (watch.items || []).some(i => i.id === prefs.sel)) selected = prefs.sel;
+  if (selected === null && prefs.sel && (watch.items || []).some(i => i.id === prefs.sel)) selected = prefs.sel;
   range = RANGES.includes(prefs.range) ? prefs.range : '1T';
 }
 async function tvScan(tickers, columns) {
@@ -1024,11 +1048,9 @@ $('sort').addEventListener('change', e => { prefs.sort = e.target.value; savePre
 $('sparkSel').addEventListener('change', e => { prefs.spark = e.target.value; savePrefs(); render(); });
 $('search').addEventListener('input', e => { searchQ = e.target.value; renderSidebar(); });
 $('search').addEventListener('keydown', e => { if (e.key === 'Enter') { const li = $('list').querySelector('li[data-id]'); if (li) select(li.dataset.id); } });
-$('showFc').addEventListener('change', e => { prefs.showFc = e.target.checked; savePrefs(); render(); });
-$('newsFilter').addEventListener('change', e => { prefs.newsFilter = e.target.value; savePrefs(); renderNewsAll(); });
+wirePopover();
 $('editBtn').addEventListener('click', () => { editing = !editing; searchResults = []; renderEditor(); if (editing) document.body.classList.add('show-main'); });
 $('depotBtn').addEventListener('click', () => { renderDepot(selected && !isIndex(selected) ? selected : undefined); $('depot').showModal(); });
-$('viewTgl').addEventListener('click', () => { if (selected) select(null); else { const f = prefs.sel !== '__overview' && prefs.sel ? prefs.sel : orderedItems()[0]?.id; if (f) select(f); } });
 $('backOv').addEventListener('click', () => document.body.classList.remove('show-main'));
 $('csv').addEventListener('click', e => {
   e.preventDefault();
