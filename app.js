@@ -3,7 +3,7 @@
 // Liest die verschlüsselten Dateien unter data/ (AES-256-GCM, PBKDF2-SHA256) und entschlüsselt im Browser (WebCrypto).
 // Depot nur lokal (localStorage), wird nie übertragen.
 const REPO = 'BigYok61/aktienuebersicht';
-const FILES = { watch: 'data/watchlist.enc.json', quotes: 'data/quotes.enc.json', news: 'data/news.enc.json', charts: 'data/charts.enc.json', alerts: 'data/alerts.enc.json', experts: 'data/experts.enc.json' };
+const FILES = { watch: 'data/watchlist.enc.json', quotes: 'data/quotes.enc.json', news: 'data/news.enc.json', charts: 'data/charts.enc.json', alerts: 'data/alerts.enc.json', experts: 'data/experts.enc.json', portfolio: 'data/portfolio.enc.json' };
 const HOURS = [9, 12, 15, 18, 22];
 const START = '2026-10-02';
 const TZ = 'Europe/Zurich';
@@ -122,8 +122,14 @@ const prefs = Object.assign({ pill: 'pct', sort: 'cat', order: [], showFc: true,
   JSON.parse(localStorage.getItem(LS.prefs) || '{}'));
 const savePrefs = () => localStorage.setItem(LS.prefs, JSON.stringify(prefs));
 let portfolio = loadPortfolio();
-function loadPortfolio() { try { return Object.assign({ version: 1, lots: {} }, JSON.parse(localStorage.getItem(LS.portfolio) || '{}')); } catch { return { version: 1, lots: {} }; } }
-function savePortfolio() { portfolio.updated = new Date().toISOString(); localStorage.setItem(LS.portfolio, JSON.stringify(portfolio)); }
+function loadPortfolio() { try { return Object.assign({ version: 1, lots: {}, deleted: {} }, JSON.parse(localStorage.getItem(LS.portfolio) || '{}')); } catch { return { version: 1, lots: {}, deleted: {} }; } }
+/** Depot ändern: lokal sofort (Cache/Offline), dann verschlüsselt ins Repo (data/portfolio.enc.json) */
+function savePortfolio() {
+  portfolio.updated = new Date().toISOString(); portfolio.dirty = true;
+  storePortfolioLocal();
+  schedulePortfolioPush();
+}
+const storePortfolioLocal = () => { try { localStorage.setItem(LS.portfolio, JSON.stringify(portfolio)); } catch { /* voll */ } };
 
 const meta = id => quotes.symbols?.[id] || {};
 const stats = id => meta(id).stats || {};
@@ -839,6 +845,7 @@ async function load() {
   render();
   loadCharts();
   loadLive();
+  pullPortfolio().then(() => { render(); if ($('depot').open) renderDepot(); });
 }
 let alertsDirty = false;
 async function loadCharts() {
@@ -1019,11 +1026,120 @@ function wireEditor() {
   const ts = el.querySelector('#tokSave'); if (ts) ts.onclick = async () => {
     const t = el.querySelector('#tok').value.trim(); if (!t) return;
     localStorage.setItem(LS.token, t);
-    try { await ghGet(FILES.watch); showOk('Token gespeichert – Bearbeiten ist aktiv.'); } catch (e) { localStorage.removeItem(LS.token); showError(`Token abgelehnt: ${e.message}`); }
+    try { await ghGet(FILES.watch); showOk('Token gespeichert – Bearbeiten ist aktiv.'); pullPortfolio().then(() => render()); } catch (e) { localStorage.removeItem(LS.token); showError(`Token abgelehnt: ${e.message}`); }
     render();
   };
   const to = el.querySelector('#tokOut'); if (to) to.onclick = () => { localStorage.removeItem(LS.token); render(); };
 }
+// ---------------------------------------------------------------- Depot im Repo (verschlüsselt, alle Geräte)
+const pSync = { sha: null, timer: 0, busy: false, level: '', text: '' };
+function setPSync(level, text) {
+  pSync.level = level; pSync.text = text;
+  const el = document.querySelector('#depot .psync'); if (el) { el.className = `small psync ${level}`; el.textContent = text; }
+}
+const lotCount = p => Object.values(p?.lots || {}).reduce((n, ls) => n + ls.length, 0);
+/** Zusammenführen pro Kauf (id): neuere Änderung (mod) gewinnt, Löschungen (deleted) bleiben gelöscht */
+function mergePortfolio(a, b) {
+  const del = { ...(a?.deleted || {}) };
+  for (const [k, t] of Object.entries(b?.deleted || {})) if (!del[k] || t > del[k]) del[k] = t;
+  const byId = {};
+  for (const src of [a, b]) for (const [sid, ls] of Object.entries(src?.lots || {})) for (const l of ls) {
+    const key = l.id || `${sid}|${l.date}|${l.qty}|${l.price}`;
+    const cur = byId[key];
+    if (!cur || (l.mod || '') > (cur.l.mod || '')) byId[key] = { sid, l };
+  }
+  const lots = {};
+  for (const { sid, l } of Object.values(byId)) {
+    if (l.id && del[l.id] && del[l.id] >= (l.mod || '')) continue;
+    (lots[sid] ||= []).push(l);
+  }
+  const sorted = o => Object.fromEntries(Object.keys(o).sort().map(k => [k, o[k]]));
+  for (const ls of Object.values(lots)) ls.sort((x, y) => x.date.localeCompare(y.date) || String(x.id).localeCompare(String(y.id)));
+  const updated = [a?.updated, b?.updated].filter(Boolean).sort().pop();
+  return { version: 1, lots: sorted(lots), deleted: sorted(del), updated };
+}
+const sameLots = (a, b) => JSON.stringify(mergePortfolio(a, {}).lots) === JSON.stringify(mergePortfolio(b, {}).lots);
+const portfolioPayload = p => ({ version: 1, lots: p.lots || {}, deleted: p.deleted || {}, updated: p.updated || new Date().toISOString() });
+/** Repo-Stand lesen: mit Token über die API (frisch, mit sha), sonst öffentlich (verschlüsselt) über raw/Pages */
+async function fetchRemotePortfolio() {
+  if (canEdit()) { const { sha, blob } = await ghGet(FILES.portfolio); return { sha, blob }; }
+  for (const url of [`https://raw.githubusercontent.com/${REPO}/main/${FILES.portfolio}`, FILES.portfolio]) {
+    try {
+      const r = await fetch(`${url}?t=${Date.now()}`, { cache: 'no-store' });
+      if (r.status === 404) continue;
+      if (r.ok) return { sha: null, blob: await r.json() };
+    } catch { /* nächste Quelle */ }
+  }
+  return { sha: null, blob: null };
+}
+/** Beim Anmelden/Laden: Repo-Stand holen, mit lokalem Stand abgleichen (einmalige Übernahme alter lokaler Daten) */
+async function pullPortfolio() {
+  let remote = null;
+  try {
+    const { sha, blob } = await fetchRemotePortfolio();
+    if (blob && blob.salt !== keySalt) return setPSync('warn', 'Depot im Repo mit anderem Passwort verschlüsselt – nicht geladen.');
+    remote = blob ? await decryptBlob(blob) : null; pSync.sha = sha;
+  } catch (e) { return setPSync('warn', `Depot im Repo nicht erreichbar (${e.message}) – lokaler Stand wird angezeigt.`); }
+  const local = portfolio, hasLocal = lotCount(local) > 0;
+  if (!remote) {
+    if (hasLocal) { local.dirty = true; storePortfolioLocal(); if (canEdit()) return pushPortfolio('Depot angelegt'); return setPSync('warn', 'Depot nur lokal: zum Speichern im Repo (alle Geräte) GitHub-Token unter „Bearbeiten“ eintragen.'); }
+    return setPSync(canEdit() ? 'ok' : '', canEdit() ? 'Noch kein Depot im Repo.' : 'Noch kein Depot im Repo. Zum Speichern GitHub-Token unter „Bearbeiten“ eintragen.');
+  }
+  let next = remote;
+  if (hasLocal && !local.syncedAt && !sameLots(local, remote) && lotCount(remote) > 0) {
+    // einmalige Migration: beide Stände vorhanden
+    if (confirm(`Depot abgleichen:\nAuf diesem Gerät: ${lotCount(local)} Käufe, im Repo: ${lotCount(remote)} Käufe.\n\nOK = zusammenführen (nichts geht verloren)\nAbbrechen = Stand aus dem Repo übernehmen (lokale Käufe werden ersetzt, Sicherung bleibt im Browser)`)) {
+      next = mergePortfolio(remote, local); next.dirty = true;
+    } else { try { localStorage.setItem(LS.portfolio + '.backup', JSON.stringify(local)); } catch { /* voll */ } }
+  } else if (local.dirty || (hasLocal && !local.syncedAt)) { next = mergePortfolio(remote, local); next.dirty = !sameLots(next, remote); }
+  portfolio = Object.assign(next, { syncedAt: new Date().toISOString() });
+  storePortfolioLocal();
+  if (portfolio.dirty) { if (canEdit()) return pushPortfolio('Depot geändert'); return setPSync('warn', 'Lokale Änderungen noch nicht im Repo: GitHub-Token unter „Bearbeiten“ eintragen.'); }
+  setPSync('ok', `Depot aus dem Repo geladen (${lotCount(portfolio)} Käufe)${canEdit() ? '' : ' – nur lesen: zum Speichern GitHub-Token unter „Bearbeiten“ eintragen'}.`);
+}
+function schedulePortfolioPush() {
+  if (!canEdit()) return setPSync('warn', 'Nur lokal gespeichert: zum Speichern im Repo (alle Geräte) GitHub-Token unter „Bearbeiten“ eintragen.');
+  setPSync('', 'Speichere im Repo …');
+  clearTimeout(pSync.timer); pSync.timer = setTimeout(() => pushPortfolio('Depot geändert'), 1200);
+}
+/** Ins Repo schreiben: aktuellen Repo-Stand holen, zusammenführen, neu verschlüsseln, mit sha committen (Konflikt: erneut) */
+async function pushPortfolio(message) {
+  if (!canEdit() || !cryptoKey) return;
+  if (pSync.busy) { clearTimeout(pSync.timer); pSync.timer = setTimeout(() => pushPortfolio(message), 800); return; }
+  pSync.busy = true;
+  try {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      const { sha, blob } = await ghGet(FILES.portfolio);
+      if (blob && blob.salt !== keySalt) throw new Error('Passwort im Repo wurde geändert – bitte neu anmelden');
+      const remote = blob ? await decryptBlob(blob) : null;
+      const merged = remote ? mergePortfolio(remote, portfolio) : portfolioPayload(portfolio);
+      if (remote && sameLots(merged, remote) && JSON.stringify(merged.deleted) === JSON.stringify(remote.deleted || {})) { // nichts Neues
+        portfolio = Object.assign(merged, { syncedAt: new Date().toISOString(), dirty: false }); pSync.sha = sha; storePortfolioLocal();
+        setPSync('ok', `Im Repo gespeichert (${lotCount(portfolio)} Käufe).`); render(); return;
+      }
+      const enc = await encryptObj(portfolioPayload(merged));
+      const body = { message, branch: 'main', content: b64e(new TextEncoder().encode(JSON.stringify(enc, null, 1) + '\n')) };
+      if (sha) body.sha = sha;
+      const r = await fetch(`https://api.github.com/repos/${REPO}/contents/${FILES.portfolio}`, { method: 'PUT', headers: { Authorization: `Bearer ${token()}`, Accept: 'application/vnd.github+json', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (r.ok) {
+        pSync.sha = (await r.json()).content?.sha || null;
+        const changedMeanwhile = (portfolio.updated || '') > (merged.updated || '');
+        portfolio = Object.assign(changedMeanwhile ? mergePortfolio(merged, portfolio) : merged, { syncedAt: new Date().toISOString(), dirty: changedMeanwhile });
+        storePortfolioLocal();
+        setPSync('ok', `Im Repo gespeichert (${lotCount(portfolio)} Käufe, ${hmFmt.format(new Date())}).`);
+        render(); if ($('depot').open) renderDepot();
+        if (changedMeanwhile) schedulePortfolioPush();
+        return;
+      }
+      if (r.status !== 409 && r.status !== 422) throw new Error(r.status === 403 ? 'Token ohne Schreibrecht (Contents: Read and write)' : r.status === 401 ? 'Token ungültig oder abgelaufen' : `GitHub HTTP ${r.status}`);
+      await new Promise(res => setTimeout(res, 400 * (attempt + 1)));
+    }
+    throw new Error('Konflikt beim Speichern – wird beim nächsten Laden erneut versucht');
+  } catch (e) {
+    setPSync('warn', `Depot nicht im Repo gespeichert (${e.message}) – lokal gesichert, neuer Versuch beim nächsten Laden.`);
+  } finally { pSync.busy = false; }
+}
+
 // ---------------------------------------------------------------- Depot-Dialog
 function renderDepot(focusId) {
   const dlg = $('depot');
@@ -1031,7 +1147,8 @@ function renderDepot(focusId) {
   const sel = focusId || dlg.dataset.id || items[0]?.id;
   dlg.dataset.id = sel;
   const m = meta(sel), lots = lotsOf(sel), hold = holding(sel);
-  let h = `<h2>Depot</h2><p class="sub">Nur auf diesem Gerät gespeichert (localStorage) – wird nie hochgeladen. Mit Export/Import auf andere Geräte übertragen.</p>
+  let h = `<h2>Depot</h2><p class="sub">Verschlüsselt im Repo gespeichert (data/portfolio.enc.json, gleiches Passwort) – auf allen Geräten gleich; lokal zwischengespeichert für offline.</p>
+    <p class="small psync ${pSync.level}">${esc(pSync.text)}</p>
     <div class="row"><select id="dSel">${items.map(it => `<option value="${esc(it.id)}" ${it.id === sel ? 'selected' : ''}>${esc(itemName(it))} (${esc(meta(it.id).currency || '')})${lotsOf(it.id).length ? ' ●' : ''}</option>`).join('')}</select>
     ${hold ? `<span class="sub">Anzahl ${nf0.format(hold.qty)} · Ø Kaufpreis ${p2(hold.avg)} ${esc(m.currency || '')} · Wert ${p2(hold.value)} CHF · ${sgn(hold.gain)} CHF (${pct(hold.gainPct)})</span>` : ''}</div>
     <table class="lots"><thead><tr><th>Kaufdatum</th><th class="n">Anzahl</th><th class="n">Kaufpreis (${esc(m.currency || '')})</th><th class="n">Devisenkurs CHF</th><th class="n">Einstand CHF</th><th></th></tr></thead><tbody>`;
@@ -1050,10 +1167,10 @@ function renderDepot(focusId) {
   const msg = t => { dlg.querySelector('#dMsg').textContent = t; };
   dlg.querySelector('#dSel').onchange = e => renderDepot(e.target.value);
   dlg.querySelector('#dClose').onclick = () => dlg.close();
-  dlg.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (!confirm('Kauf löschen?')) return; lots.splice(+b.dataset.rm, 1); if (!lots.length) delete portfolio.lots[sel]; savePortfolio(); renderDepot(sel); render(); });
+  dlg.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (!confirm('Kauf löschen?')) return; const [gone] = lots.splice(+b.dataset.rm, 1); if (gone?.id) (portfolio.deleted ||= {})[gone.id] = new Date().toISOString(); if (!lots.length) delete portfolio.lots[sel]; savePortfolio(); renderDepot(sel); render(); });
   dlg.querySelectorAll('[data-f]').forEach(inp => inp.onchange = async () => {
     const l = lots[+inp.dataset.i]; const f = inp.dataset.f;
-    l[f] = f === 'date' ? inp.value : +inp.value;
+    l[f] = f === 'date' ? inp.value : +inp.value; l.mod = new Date().toISOString();
     if (f === 'date') { l.fx = null; try { l.fx = await fxOnDate(base, l.date); } catch (e) { msg(`Devisenkurs nicht verfügbar: ${e.message}`); } }
     savePortfolio(); renderDepot(sel); render();
   });
@@ -1061,7 +1178,7 @@ function renderDepot(focusId) {
     const date = dlg.querySelector('#nDate').value, qty = +dlg.querySelector('#nQty').value, price = +dlg.querySelector('#nPrice').value;
     if (!date || !(qty > 0) || !(price > 0)) return msg('Bitte Datum, Anzahl und Kaufpreis eingeben.');
     let fx = null; try { fx = await fxOnDate(base, date); } catch (e) { msg(`Devisenkurs nicht verfügbar (${e.message}) – wird später nachgetragen.`); }
-    (portfolio.lots[sel] ||= []).push({ id: crypto.randomUUID(), date, qty, price, fx });
+    (portfolio.lots[sel] ||= []).push({ id: crypto.randomUUID(), date, qty, price, fx, mod: new Date().toISOString() });
     portfolio.lots[sel].sort((a, b) => a.date.localeCompare(b.date));
     savePortfolio(); renderDepot(sel); render();
   };
@@ -1074,8 +1191,11 @@ function renderDepot(focusId) {
     try {
       const j = JSON.parse(await e.target.files[0].text());
       if (!j || typeof j.lots !== 'object') throw new Error('kein Depot-Format');
-      if (!confirm('Depot auf diesem Gerät durch die importierte Datei ersetzen?')) return;
-      portfolio = { version: 1, lots: j.lots }; savePortfolio(); renderDepot(); render(); msg('Importiert.');
+      if (!confirm('Depot (auf allen Geräten) durch die importierte Datei ersetzen?')) return;
+      const now = new Date().toISOString(), del = { ...(portfolio.deleted || {}) }, keep = new Set(Object.values(j.lots).flat().map(l => l.id));
+      for (const l of Object.values(portfolio.lots).flat()) if (l.id && !keep.has(l.id)) del[l.id] = now;
+      for (const ls of Object.values(j.lots)) for (const l of ls) { l.id ||= crypto.randomUUID(); l.mod = now; }
+      portfolio = { version: 1, lots: j.lots, deleted: del, syncedAt: portfolio.syncedAt }; savePortfolio(); renderDepot(); render(); msg('Importiert.');
     } catch (err) { msg(`Import fehlgeschlagen: ${err.message}`); }
   };
 }
@@ -1083,7 +1203,7 @@ async function fillMissingFx() {
   let changed = false;
   for (const [id, lots] of Object.entries(portfolio.lots)) {
     const [base] = ccyInfo(meta(id).currency);
-    for (const l of lots) if (l.fx == null && base !== 'CHF' && meta(id).currency) { try { l.fx = await fxOnDate(base, l.date); changed = true; } catch { /* später */ } }
+    for (const l of lots) if (l.fx == null && base !== 'CHF' && meta(id).currency) { try { l.fx = await fxOnDate(base, l.date); l.mod = new Date().toISOString(); changed = true; } catch { /* später */ } }
   }
   if (changed) { savePortfolio(); render(); }
 }

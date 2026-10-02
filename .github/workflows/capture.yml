@@ -10,7 +10,7 @@ on:
     - cron: "25 6 * * 6"
   push:
     branches: [main]
-    paths-ignore: ["data/quotes.enc.json", "data/news.enc.json", "data/alerts.enc.json", "data/alertstate.enc.json", "README.md", ".github/workflows/alerts.yml", "scripts/alerts.py"]
+    paths-ignore: ["data/quotes.enc.json", "data/portfolio.enc.json", "data/news.enc.json", "data/alerts.enc.json", "data/alertstate.enc.json", "README.md", ".github/workflows/alerts.yml", "scripts/alerts.py"]
   workflow_dispatch:
 
 permissions:

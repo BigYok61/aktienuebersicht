@@ -2,7 +2,7 @@
 
 Watchlist mit Kursen werktags um 09, 12, 15, 18 und 22 Uhr (Europe/Zurich) in der Handelswährung, Veränderung seit 09:00,
 Prognosen (Tagesende, 7 Tage, 3 Monate, 12 Monate – Schätzung, keine Anlageberatung) mit Ist-Vergleich, Dividende,
-Analysten-Kursziel (Konsens), News der letzten 72 Stunden und ein rein lokales Depot.
+Analysten-Kursziel (Konsens), News der letzten 72 Stunden und ein Depot, das auf allen Geräten gleich ist.
 Web-App: https://bigyok61.github.io/aktienuebersicht/ – die macOS-App liest dieselben Dateien.
 
 ## Dateien
@@ -14,13 +14,29 @@ Web-App: https://bigyok61.github.io/aktienuebersicht/ – die macOS-App liest di
 - `data/watchlist.enc.json` – Watchlist (Titel, Kategorien, Reihenfolge) – **verschlüsselt**
 - `data/quotes.enc.json` – Kurse, Devisenkurse (CHF) je Zeitpunkt, Schlusskurse, Prognosen, Dividenden, Kursziele – **verschlüsselt**
 - `data/news.enc.json` – Schlagzeilen (Titel, Link, Quelle, Zeit) – **verschlüsselt**
+- `data/portfolio.enc.json` – Depot (Käufe, Kaufpreise, Devisenkurse am Kaufdatum) – **verschlüsselt**
+- `data/experts.enc.json` – veröffentlichte Experten-Kursziele mit Quelle und Datum – **verschlüsselt**
 - `data/alerts.enc.json` / `data/alertstate.enc.json` – Kursalarme bzw. bereits gesendete Push-Meldungen – **verschlüsselt**
 - `scripts/alerts.py` – Push-Alarme via ntfy (eigener Workflow, alle 15 Min.)
 - Chartdaten (`charts.enc.json`, komprimiert, verschlüsselt) werden nur auf GitHub Pages veröffentlicht, nicht committet.
 - `index.html`, `app.js`, `style.css`, `sw.js`, `manifest.webmanifest` – PWA, entschlüsselt im Browser (WebCrypto).
 
 Im Repository liegen nie unverschlüsselte Daten (`.gitignore` und eine Prüfung im Workflow verhindern das).
-Das Depot (Käufe, Bestände) wird **nie** ins Repository geschrieben: Web = localStorage, Mac = lokale Datei/iCloud Drive.
+Auch das Depot liegt nur verschlüsselt im Repository (`data/portfolio.enc.json`, gleiches Passwort) – Web-App und Mac-App
+lesen und schreiben dieselbe Datei, darum ist es auf allen Geräten gleich.
+
+## Depot (alle Geräte)
+- **Lesen** geht immer (auch ohne Token): Die App lädt `data/portfolio.enc.json` und entschlüsselt sie im Browser bzw. auf dem Mac.
+- **Speichern** braucht den GitHub-Token (siehe unten). Jede Änderung wird lokal sofort gesichert (Web: localStorage,
+  Mac: `~/Library/Application Support/Aktienuebersicht/portfolio.json`) und gleich danach verschlüsselt ins Repository
+  geschrieben. Ohne Token oder offline bleibt sie lokal und wird beim nächsten Laden mit Token nachgetragen.
+- **Gleichzeitige Änderungen** auf zwei Geräten gehen nicht verloren: Die App holt vor dem Speichern den aktuellen Stand,
+  führt pro Kauf zusammen (neuere Änderung gewinnt, gelöschte Käufe bleiben gelöscht) und speichert mit Konfliktprüfung (sha).
+- **Erstes Mal / Umzug:** Gibt es auf einem Gerät noch ein altes lokales Depot (früher nur localStorage bzw. iCloud Drive),
+  wird es beim ersten Anmelden mit Token hochgeladen. Liegt im Repository schon ein anderes Depot, fragt die App:
+  «zusammenführen» (nichts geht verloren) oder «Stand aus dem Repo übernehmen» (lokale Sicherung bleibt erhalten).
+- Export/Import (JSON) gibt es weiterhin; ein Import ersetzt das Depot auf allen Geräten.
+- Depot-Änderungen lösen keine Kurserfassung aus; die Pages-Kopie wird beim nächsten Lauf aktualisiert (die Apps lesen direkt aus dem Repo).
 
 ## Verschlüsselungsformat
 ```json
@@ -53,7 +69,8 @@ Ziel: Schlusskurs am Zieltag (+0 / +7 Tage / +3 / +12 Monate), sonst nächster H
    «Abmelden» (unten links) löscht ihn wieder.
 
 ## Watchlist und Kursalarme bearbeiten (GitHub-Token)
-Ohne Token ist die App nur lesbar (Sortierung und eigene Reihenfolge werden lokal gespeichert). Zum Bearbeiten braucht es
+Ohne Token ist die App nur lesbar (Sortierung und eigene Reihenfolge werden lokal gespeichert). Zum Bearbeiten (Watchlist,
+Kursalarme, Depot) braucht es
 einmalig einen GitHub-Token, der nur dieses eine Repository ändern darf.
 
 **Token erstellen (einmalig):**
@@ -80,7 +97,7 @@ und committet. Der Commit startet die Erfassung; neue Titel erscheinen samt Verl
 - Watchlist-Titel mit Tagesveränderung ≥ ±5 % (einmal je Titel, Tag und Richtung),
 - beliebige US-Aktie mit ≥ ±10 % (Top-Gewinner/-Verlierer, einmal je Titel und Tag),
 - eigene Kursalarme (z. B. TSLA unter 200),
-- um 22:15 die Tagesbilanz (Indizes, grösste Bewegungen der Watchlist; das Depot bleibt lokal und erscheint dort nicht).
+- um 22:15 die Tagesbilanz (Indizes, grösste Bewegungen der Watchlist; das Depot erscheint dort nicht).
 
 Empfangen: ntfy-App (iOS/Android) → «+» → Topic eintragen (bei der Einrichtung festgelegt, als Secret `NTFY_TOPIC` hinterlegt – privat halten; ein Secret lässt sich auf GitHub nicht auslesen, nur neu setzen).
 Bereits gesendete Alarme stehen verschlüsselt in `data/alertstate.enc.json` (keine Doppelmeldungen).

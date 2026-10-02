@@ -290,3 +290,4 @@ body[data-cols="4"] #app { grid-template-columns: 540px 1fr; }
 }
 .list .pill { cursor: pointer; white-space: nowrap; user-select: none; -webkit-user-select: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .list .pill:hover { filter: brightness(1.08); } .list .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.psync.ok { color: var(--up); } .psync.warn { color: #c77700; }
