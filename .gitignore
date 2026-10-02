@@ -6,3 +6,4 @@ data/*.json
 !data/*.enc.json
 screenshot*.png
 .DS_Store
+build/

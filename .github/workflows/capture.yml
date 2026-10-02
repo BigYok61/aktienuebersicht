@@ -10,7 +10,7 @@ on:
     - cron: "25 6 * * 6"
   push:
     branches: [main]
-    paths-ignore: ["data/quotes.enc.json", "data/news.enc.json", "README.md"]
+    paths-ignore: ["data/quotes.enc.json", "data/news.enc.json", "data/alerts.enc.json", "data/alertstate.enc.json", "README.md", ".github/workflows/alerts.yml", "scripts/alerts.py"]
   workflow_dispatch:
 
 permissions:
@@ -25,7 +25,7 @@ concurrency:
 jobs:
   capture:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -60,6 +60,8 @@ jobs:
           mkdir -p _site/data
           cp -r index.html app.js style.css sw.js manifest.webmanifest icons _site/
           cp data/*.enc.json _site/data/
+          rm -f _site/data/alertstate.enc.json
+          [ -f build/charts.enc.json ] && cp build/charts.enc.json _site/data/ || echo "Keine Chartdaten"
           touch _site/.nojekyll
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

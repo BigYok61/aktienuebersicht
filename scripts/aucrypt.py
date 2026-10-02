@@ -6,7 +6,7 @@ Alle Dateien eines Standes verwenden dasselbe Salt (damit Web/Mac den abgeleitet
 und optional merken koennen); jede Verschluesselung erhaelt einen neuen zufaelligen IV (12 Byte).
 Identisch implementiert in app.js (WebCrypto) und AktienuebersichtApp.swift (CryptoKit + CommonCrypto).
 """
-import base64, hashlib, json, os
+import base64, hashlib, json, os, zlib
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
@@ -52,16 +52,28 @@ class Keyring:
             raise WrongPassword("Entschluesselung fehlgeschlagen (falsches Passwort?)") from e
         if self.salt is None:
             self.salt = salt
+        if blob.get("z") == "deflate-raw":
+            pt = zlib.decompress(pt, -15)
         return json.loads(pt.decode("utf-8"))
 
-    def encrypt(self, obj):
+    def encrypt(self, obj, compress=False):
         if self.salt is None:
             self.salt = os.urandom(16)
         iv = os.urandom(12)
         pt = json.dumps(obj, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        if compress:   # roher Deflate-Strom (Web: DecompressionStream('deflate-raw'), Swift: zlib inflateInit2(-15))
+            c = zlib.compressobj(9, zlib.DEFLATED, -15)
+            pt = c.compress(pt) + c.flush()
         ct = AESGCM(self.key(self.salt)).encrypt(iv, pt, None)
-        return {"v": 1, "alg": "AES-256-GCM", "kdf": "PBKDF2-SHA256", "iter": ITERATIONS,
-                "salt": b64e(self.salt), "iv": b64e(iv), "ct": b64e(ct)}
+        out = {"v": 1, "alg": "AES-256-GCM", "kdf": "PBKDF2-SHA256", "iter": ITERATIONS,
+               "salt": b64e(self.salt), "iv": b64e(iv), "ct": b64e(ct)}
+        if compress:
+            out["z"] = "deflate-raw"
+        return out
+
+
+def decrypt_any(blob, ring):
+    return ring.decrypt(blob)
 
 
 def read_enc(path, ring):

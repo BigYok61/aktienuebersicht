@@ -1,0 +1,48 @@
+name: Push-Alarme (ntfy)
+
+on:
+  schedule:
+    # alle 15 Min. Mo–Fr 06–21 UTC (= ca. 08:00–23:45 Zurich); das Skript filtert 08:00–22:15 Zurich
+    # und sendet die Tagesbilanz ab 22:15 Zurich einmal pro Tag.
+    - cron: "*/15 6-21 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      test:
+        description: "Nur Test-Push senden"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: alerts
+  cancel-in-progress: false
+
+jobs:
+  alerts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet "cryptography>=42"
+      - name: Alarme pruefen und senden
+        env:
+          AKTIEN_PASSWORD: ${{ secrets.AKTIEN_PASSWORD }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        run: |
+          if [ "${{ inputs.test }}" = "true" ]; then python3 scripts/alerts.py --test; else python3 scripts/alerts.py; fi
+      - name: Alarmstatus committen (verschluesselt)
+        run: |
+          if git diff --quiet -- data/alertstate.enc.json && [ -z "$(git ls-files --others --exclude-standard data/alertstate.enc.json)" ]; then
+            echo "Kein neuer Status."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/alertstate.enc.json
+            git commit -m "Alarmstatus"
+            for i in 1 2 3; do git pull --rebase && git push && break; sleep 5; done
+          fi

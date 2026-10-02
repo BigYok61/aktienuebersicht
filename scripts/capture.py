@@ -33,6 +33,9 @@ ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 F_WATCH = os.path.join(ROOT, "data", "watchlist.enc.json")
 F_QUOTES = os.path.join(ROOT, "data", "quotes.enc.json")
 F_NEWS = os.path.join(ROOT, "data", "news.enc.json")
+# Chartdaten werden NICHT committet (zu gross fuer stuendliche Commits), nur mit der Seite veroeffentlicht.
+F_CHARTS = os.environ.get("AU_CHARTS_OUT") or os.path.join(ROOT, "build", "charts.enc.json")
+CHARTS_URL = "https://bigyok61.github.io/aktienuebersicht/data/charts.enc.json"
 
 DEFAULT_CATEGORIES = ["Indizes", "Tech", "Auto", "Pharma", "Banken", "Konsum", "Industrie"]
 # TradingView-Boerse -> CNBC-Suffix
@@ -139,7 +142,7 @@ def cnbc_bars(symbol, rng):
     for b in bars:
         try:
             out.append((b["tradeTimeinMills"] / 1000.0, float(b["open"]), float(b["high"]), float(b["low"]),
-                        float(b["close"]), b["tradeTime"][:8]))
+                        float(b["close"]), b["tradeTime"][:8], int(b.get("volume") or 0)))
         except (KeyError, ValueError, TypeError):
             continue
     out.sort()
@@ -173,7 +176,9 @@ TV_COLS = ["name", "description", "close", "currency", "type", "exchange", "sect
            "dividend_ex_date_upcoming", "dividend_payment_date_upcoming", "dividend_amount_upcoming",
            "dividend_ex_date_recent", "dividend_payment_date_recent", "dividend_amount_recent",
            "price_target_1y", "price_target_average", "price_target_median", "price_target_high", "price_target_low",
-           "recommendation_total", "country"]
+           "recommendation_total", "country", "open", "high", "low", "volume", "change", "change_abs",
+           "market_cap_basic", "price_52_week_high", "price_52_week_low", "average_volume_30d_calc", "beta_1_year",
+           "earnings_per_share_basic_ttm", "price_earnings_ttm", "earnings_release_next_date", "earnings_release_date"]
 
 
 def tv_scan(tickers):
@@ -401,6 +406,8 @@ def main():
             meta["last"] = num(x.get("last"))
             meta["lastTime"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    charts = load_charts(ring)
+    fxnow = {}
     # --- Devisen (CHF je Einheit) an den Zeitpunkten
     ccys = sorted({norm_ccy(m.get("currency") or "CHF")[0] for m in quotes["symbols"].values() if m.get("currency")} - {"CHF"})
     days = weekdays(START_DAY, today)
@@ -410,6 +417,8 @@ def main():
         except Exception as e:  # noqa
             errors.append(f"FX: {type(e).__name__}")
             continue
+        if bars:
+            fxnow[ccy] = bars[-1][4]
         for d in days:
             for hh in SLOT_HOURS:
                 t = slot_dt(d, hh)
@@ -427,7 +436,7 @@ def main():
             continue
         try:
             intraday = cnbc_bars(sym, "5D")
-            daily_raw = cnbc_bars(sym, "3M")   # bei CNBC: ca. 2 Jahre Tageskerzen
+            daily_raw = cnbc_bars(sym, "6M")   # bei CNBC: ca. 3 Jahre Tageskerzen
         except Exception as e:  # noqa
             errors.append(f"{tag(sid)}: {type(e).__name__}")
             continue
@@ -467,6 +476,15 @@ def main():
             for k, fn in (("1d", fc_day_end), ("7d", fc_7d), ("3m", fc_3m), ("12m", fc_12m)):
                 changed += put(fc.setdefault(k, {}), sid, fn(spot, hist))
         meta["history"] = len(daily)
+        # Vortagesschluss je Tag (fuer Spalte "Heute"): letzter Tagesschluss vor dem Tag
+        for d in days:
+            prev = [x for x in daily if x[0] < d]
+            if prev:
+                changed += put(day_rec(quotes, d.isoformat()).setdefault("prev", {}), sid, prev[-1][4])
+        try:
+            build_chart(charts, sid, sym, intraday, daily_raw, today, errors)
+        except Exception as e:  # noqa
+            errors.append(f"Chart {tag(sid)}: {type(e).__name__}")
         meta["added"] = added.isoformat()
 
         # --- Dividende (Betrag/Rendite in Handelswaehrung bevorzugt von CNBC; Termine von TradingView)
@@ -549,6 +567,32 @@ def main():
         else:
             quotes["targets"][sid] = {"status": "keine Daten" if meta["type"] != "index" else "index", "asOf": today.isoformat()}
 
+    # --- Kennzahlen (TradingView; Fundamentaldaten teils in USD -> in Handelswaehrung umgerechnet)
+    for it in items:
+        sid, meta = it["id"], quotes["symbols"][it["id"]]
+        t = tv.get(sid) or {}
+        if not t:
+            continue
+        ccy, unit = norm_ccy(meta.get("currency") or "USD")
+        usd_chf = fxnow.get("USD") or latest_fx(quotes, "USD")
+        ccy_chf = 1.0 if ccy == "CHF" else (fxnow.get(ccy) or latest_fx(quotes, ccy))
+        usd_to_ccy = (usd_chf / ccy_chf) if (usd_chf and ccy_chf) else None
+        pe, close = t.get("price_earnings_ttm"), t.get("close")
+        eps = (close / pe) if (pe and close) else None
+        if eps is None and t.get("earnings_per_share_basic_ttm") is not None and usd_to_ccy:
+            eps = t["earnings_per_share_basic_ttm"] * usd_to_ccy / unit
+        mc = t.get("market_cap_basic")
+        st = {"open": t.get("open"), "high": t.get("high"), "low": t.get("low"), "volume": t.get("volume"),
+              "pe": pe, "eps": eps, "beta": t.get("beta_1_year"), "avgVol": t.get("average_volume_30d_calc"),
+              "h52": t.get("price_52_week_high"), "l52": t.get("price_52_week_low"),
+              "mcapUSD": mc, "mcap": (mc * usd_to_ccy) if (mc and usd_to_ccy) else None, "mcapCcy": ccy,
+              "mcapChf": (mc * usd_chf) if (mc and usd_chf) else None,
+              "divYield": t.get("dividends_yield_current"), "change": t.get("change"), "changeAbs": t.get("change_abs"),
+              "earningsNext": tsdate(t.get("earnings_release_next_date")) and tsdate(t.get("earnings_release_next_date")).isoformat(),
+              "earningsLast": tsdate(t.get("earnings_release_date")) and tsdate(t.get("earnings_release_date")).isoformat(),
+              "asOf": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
+        meta["stats"] = {k: (round(v, 6) if isinstance(v, float) else v) for k, v in st.items() if v is not None}
+
     # entfernte Titel bleiben im Verlauf, Stammdaten werden aber nicht mehr aktualisiert
     quotes["days"] = dict(sorted(quotes["days"].items()))
     quotes["slotHours"] = SLOT_HOURS
@@ -557,6 +601,9 @@ def main():
     if changed or not quotes.get("updated"):
         quotes["updated"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     aucrypt.write_enc(F_QUOTES, quotes, ring)
+    charts["updated"] = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    charts["s"] = {k: v for k, v in charts["s"].items() if k in ids}
+    write_charts(charts, ring)
 
     # --- News (Google News RSS)
     try:
@@ -567,6 +614,87 @@ def main():
     log(f"{changed} neue Werte; Fehler: {errors or 'keine'}")
     if errors and changed == 0 and not tv and not cq:
         sys.exit(1)
+
+
+# ---------------------------------------------------------------- Chartdaten (nur Seite, nicht Repo)
+
+def latest_fx(quotes, ccy):
+    for k in sorted(quotes.get("days", {}), reverse=True):
+        fx = quotes["days"][k].get("fx", {})
+        for h in sorted(fx, reverse=True):
+            if fx[h].get(ccy):
+                return fx[h][ccy]
+    return None
+
+
+def sig(x, n=6):
+    if x is None or not math.isfinite(x) or x == 0:
+        return x
+    return round(x, max(0, n - 1 - int(math.floor(math.log10(abs(x))))))
+
+
+def load_charts(ring):
+    """Vorherigen Stand von der Seite holen (Wochen-/Gesamtverlauf nur einmal taeglich neu laden)."""
+    base = None
+    if os.path.exists(F_CHARTS):
+        try:
+            base = aucrypt.decrypt_any(json.load(open(F_CHARTS, encoding="utf-8")), ring)
+        except Exception:  # noqa
+            base = None
+    if base is None and not os.environ.get("AU_NO_REMOTE"):
+        try:
+            base = aucrypt.decrypt_any(json.loads(http(CHARTS_URL + "?t=" + str(int(time.time())), timeout=30)), ring)
+        except Exception:  # noqa
+            base = None
+    if not isinstance(base, dict) or base.get("version") != 1:
+        base = {"version": 1, "s": {}}
+    base.setdefault("s", {})
+    return base
+
+
+def build_chart(charts, sid, sym, intraday, daily_raw, today, errors):
+    e = charts["s"].setdefault(sid, {})
+    # Intraday: letzter Handelstag in 5-Min.-Kerzen, die 4 Tage davor in 30-Min.-Kerzen (Zeit: Epoch-Minuten)
+    days = sorted({b[5] for b in intraday})
+    last = days[-1] if days else None
+    keep = set(days[-5:])
+    rows, agg = [], {}
+    for b in intraday:
+        if b[5] not in keep:
+            continue
+        tm = int(b[0] // 60)
+        if b[5] == last:
+            rows.append([tm, sig(b[4]), b[6]])
+        else:
+            k = tm // 30
+            a = agg.get(k)
+            if a is None:
+                agg[k] = [k * 30, sig(b[4]), b[6]]
+            else:
+                a[1] = sig(b[4]); a[2] += b[6]
+    e["i"] = sorted(list(agg.values()) + rows)
+    e["iDay"] = last
+    dl = [[int(b[5]), sig(b[4]), b[6]] for b in daily_raw if b[5] and b[5][:8].isdigit()]
+    dl.sort()
+    e["d"] = dl[-560:]   # ca. 2 Jahre + YTD
+    prev = [x for x in dl if last and str(x[0]) < last]
+    e["pc"] = prev[-1][1] if prev else None
+    if e.get("wkDay") != today.isoformat() or "w" not in e:
+        try:
+            wk = cnbc_bars(sym, "5Y")
+            e["w"] = [[int(b[5]), sig(b[4]), b[6]] for b in wk][-265:]
+            al = cnbc_bars(sym, "ALL")
+            e["a"] = [[int(b[5]), sig(b[4])] for b in al]
+            e["wkDay"] = today.isoformat()
+        except Exception as ex:  # noqa
+            errors.append(f"Chart lang {tag(sid)}: {type(ex).__name__}")
+        time.sleep(0.2)
+
+
+def write_charts(charts, ring):
+    os.makedirs(os.path.dirname(F_CHARTS), exist_ok=True)
+    with open(F_CHARTS, "w", encoding="utf-8") as f:
+        json.dump(ring.encrypt(charts, compress=True), f)
 
 
 STRIP = re.compile(r"\b(AG|SA|S\.A\.|Inc\.?|Corp\.?|Corporation|Holding|Holdings|Ltd\.?|plc|N\.V\.|SE|Group|Aktiengesellschaft|Co\.?|Class [A-C])\b", re.I)
