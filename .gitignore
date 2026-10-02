@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+*.tmp
+*.plain.json
+data/*.json
+!data/*.enc.json
+screenshot*.png
+.DS_Store

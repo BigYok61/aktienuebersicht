@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="de-CH">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Aktienübersicht</title>
+<meta name="description" content="Aktienübersicht – Watchlist mit Kursen, Prognosen, Dividenden und Kurszielen">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#11795a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Aktien">
+<meta name="referrer" content="no-referrer">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="login" class="login" hidden>
+  <form id="loginForm" class="card">
+    <img src="icons/icon.svg" alt="" width="64" height="64">
+    <h1>Aktienübersicht</h1>
+    <p class="sub">Die Daten sind verschlüsselt. Bitte Passwort eingeben.</p>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="Passwort" required>
+    <label class="chk"><input id="remember" type="checkbox"> Passwort merken (auf diesem Gerät)</label>
+    <button type="submit" id="loginBtn">Entsperren</button>
+    <p id="loginErr" class="error" hidden></p>
+  </form>
+</div>
+
+<div id="app" hidden>
+<header>
+  <div class="titlebar">
+    <h1>Aktienübersicht</h1>
+    <div class="tools">
+      <select id="sort" aria-label="Sortierung" title="Sortierung">
+        <option value="alpha">Alphabetisch</option>
+        <option value="cat">Nach Kategorie</option>
+        <option value="manual">Eigene Reihenfolge</option>
+      </select>
+      <button id="editBtn" type="button" title="Watchlist bearbeiten">Bearbeiten</button>
+      <button id="depotBtn" type="button" title="Depot (nur auf diesem Gerät gespeichert)">Depot</button>
+      <button id="reload" type="button" aria-label="Aktualisieren" title="Aktualisieren">↻</button>
+    </div>
+  </div>
+  <p id="stand" class="sub">Lade Daten …</p>
+  <p class="note">Kurse werktags um 09, 12, 15, 18 und 22 Uhr Schweizer Zeit (Europe/Zurich) in der Handelswährung, Veränderung gegenüber 09:00. „Jetzt“: aktueller Kurs (bis 15 Min. verzögert).</p>
+  <p class="note purple">* Prognosen (Tagesende, 7 Tage, 3 Monate, 12 Monate), jeweils zum ersten Zeitpunkt des Tages erstellt: Schätzung, keine Anlageberatung.</p>
+  <label class="chk small"><input id="showFc" type="checkbox" checked> Prognosen anzeigen</label>
+  <div id="error" class="error" hidden></div>
+</header>
+<section id="editor" class="panel" hidden></section>
+<main>
+  <div class="scroller" id="scroller">
+    <table id="grid" aria-label="Kursübersicht"></table>
+  </div>
+</main>
+<section class="news">
+  <div class="newshead">
+    <h2>News <span class="sub" id="newsInfo"></span></h2>
+    <div class="tools">
+      <select id="newsFilter" aria-label="News filtern"></select>
+      <label class="chk small"><input id="newsGroup" type="checkbox"> nach Aktie gruppieren</label>
+    </div>
+  </div>
+  <div id="newsList"></div>
+</section>
+<footer>
+  <span>Quellen: CNBC (Kurse, Devisen, Dividenden), TradingView (Jetzt-Kurse, Termine, Kursziele, Suche), Google News, EZB via Frankfurter</span>
+  <span id="updated"></span>
+  <a href="#" id="csv">CSV</a>
+  <a href="#" id="logout">Abmelden</a>
+</footer>
+</div>
+
+<dialog id="depot"></dialog>
+<script src="app.js"></script>
+</body>
+</html>

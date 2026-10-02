@@ -1,0 +1,69 @@
+name: Kurse erfassen und Seite veroeffentlichen
+
+on:
+  schedule:
+    # GitHub-Cron laeuft in UTC und kann sich verspaeten. Stuendlich um :25 (Mo–Fr, 06–21 UTC) plus Nachlauf am Samstag.
+    # Das Skript filtert selbst auf 09/12/15/18/22 Uhr Europe/Zurich (Sommer-/Winterzeit automatisch, Kurse bis
+    # 15 Min. verzoegert) und traegt verpasste Zeitpunkte aus dem ca. 10-taegigen 5-Minuten-Verlauf nach.
+    - cron: "25 6-21 * * 1-5"
+    - cron: "40 21 * * 1-5"
+    - cron: "25 6 * * 6"
+  push:
+    branches: [main]
+    paths-ignore: ["data/quotes.enc.json", "data/news.enc.json", "README.md"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: capture
+  cancel-in-progress: false
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Abhaengigkeiten
+        run: pip install --quiet "cryptography>=42"
+      - name: Kurse, Dividenden, Kursziele und News erfassen (verschluesselt)
+        env:
+          AKTIEN_PASSWORD: ${{ secrets.AKTIEN_PASSWORD }}
+        run: python3 scripts/capture.py
+      - name: Daten committen (nur bei Aenderungen, nur verschluesselte Dateien)
+        run: |
+          if git status --porcelain -- data | grep -v '\.enc\.json$' | grep -q .; then
+            echo "Unverschluesselte Datei unter data/ – Abbruch"; git status --porcelain -- data; exit 1
+          fi
+          if git diff --quiet -- data && [ -z "$(git ls-files --others --exclude-standard data)" ]; then
+            echo "Keine neuen Werte."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add data/*.enc.json
+            git commit -m "Kurse $(date -u +%Y-%m-%dT%H:%MZ)"
+            git pull --rebase --autostash || { echo "Konflikt – naechster Lauf holt nach"; exit 1; }
+            git push
+          fi
+      - name: Seite zusammenstellen
+        run: |
+          mkdir -p _site/data
+          cp -r index.html app.js style.css sw.js manifest.webmanifest icons _site/
+          cp data/*.enc.json _site/data/
+          touch _site/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deployment
+        uses: actions/deploy-pages@v4
