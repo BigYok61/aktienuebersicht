@@ -270,9 +270,9 @@ dialog .lots input { width: 110px; }
 @media (min-width: 761px) { .toolbar { display: none; } #detail { padding-top: 18px; } }
 
 /* Prognose-/Experten-Spalten rechts vom Kurs */
-body[data-cols="1"] #app { grid-template-columns: 380px 1fr; }
-body[data-cols="3"] #app { grid-template-columns: 480px 1fr; }
-body[data-cols="4"] #app { grid-template-columns: 540px 1fr; }
+body[data-cols="1"] #app { grid-template-columns: 392px 1fr; }
+body[data-cols="3"] #app { grid-template-columns: 506px 1fr; }
+body[data-cols="4"] #app { grid-template-columns: 574px 1fr; }
 .list .xc { flex: 0 0 50px; text-align: right; font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.25; }
 .list .xc.exp { flex-basis: 58px; display: flex; flex-direction: column; align-items: flex-end; }
 .list .xc .x2 { font-size: 10px; font-weight: 500; opacity: .85; white-space: nowrap; }
@@ -308,3 +308,12 @@ dialog .lots input:disabled { opacity: .55; }
 .list li.st:hover { background-image: linear-gradient(var(--group), var(--group)); }
 .list li.cat[class*=" t"] { margin-top: 8px; padding-top: 9px; border-radius: 8px 8px 0 0; }
 .list li.st.sel { background: var(--sel); }
+
+/* Währung links vom Betrag (klein, gedämpft, damit Spalten kompakt bleiben) */
+.cy { font-size: .78em; font-weight: 500; color: var(--muted); margin-right: .22em; letter-spacing: -.01em; }
+.pill .cy, .list li.sel .cy { color: inherit; opacity: .85; }
+.dprice b .cy { font-size: .62em; font-weight: 500; margin-right: .25em; }
+@media (min-width: 761px) { .list .xc { flex-basis: 58px; } .list .xc.exp { flex-basis: 66px; } }
+.list .xc .cy { font-size: 9.5px; margin-right: 2px; }
+@media (max-width: 760px) { .list .xc { flex-basis: 44px; } .list .xc.exp { flex-basis: 50px; } .list .nm { min-width: 58px; } .list .xc .cy { font-size: 8px; margin-right: 1px; } .list .px .v .cy { font-size: 10px; } .list li { gap: 6px; } }
+.list .xc .x2 .cy { font-size: 8.5px; }

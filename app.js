@@ -498,7 +498,7 @@ const cpx = v => { // kompakter Kurswert für die Liste
 };
 const fcCell = (id, fk, lab) => {
   const f = ownFc(id, fk); if (!f || !ok(f.v)) return '<span class="na">–</span>';
-  return `<span class="${chgCls(f.pct)}t" title="${esc(`Eigene Prognose ${lab}: ${p2(f.v)} ${ccyLabel(id)} (Ziel ${dmy(f.target)}, erstellt ${dmy(f.k)} 09:00)\n${pct(f.pct)} ggü. aktuellem Kurs ${p2(f.base)}\n${DISCLAIMER}`)}">${cpx(f.v)}</span>`;
+  return `<span class="${chgCls(f.pct)}t" title="${esc(`Eigene Prognose ${lab}: ${p2(f.v)} ${ccyLabel(id)} (Ziel ${dmy(f.target)}, erstellt ${dmy(f.k)} 09:00)\n${pct(f.pct)} ggü. aktuellem Kurs ${p2(f.base)}\n${DISCLAIMER}`)}">${wc(id, cpx(f.v))}</span>`;
 };
 /** Zusatzspalten in der Liste rechts vom Kurs: { grp: 'own' | 'exp', head, html: id => '…' } */
 const LIST_COLS = [
@@ -507,18 +507,22 @@ const LIST_COLS = [
   { grp: 'own', head: '12 M.', html: id => fcCell(id, '12m', '12 Monate') },
   { grp: 'exp', head: 'Exp.', cls: 'exp', html: id => {
     const xs = expertList(id); if (!xs.length) return '<span class="na">–</span>';
-    return xs.slice(0, 2).map((x, i) => `<span class="${i ? 'x2 ' : ''}${chgCls(x.pct)}t" title="${esc(expertTip(x))}">${i ? esc(x.short) + ' ' : ''}${cpx(x.target)}</span>`).join('');
+    return xs.slice(0, 2).map((x, i) => `<span class="${i ? 'x2 ' : ''}${chgCls(x.pct)}t" title="${esc(expertTip(x))}">${i ? esc(x.short) + ' ' : ''}${wc(id, cpx(x.target), x.ccy)}</span>`).join('');
   } },
 ];
 const activeCols = () => LIST_COLS.filter(c => prefs.cols === 'all' || prefs.cols === c.grp);
 const CCY_SYM = { USD: '$', EUR: '€', GBP: '£', GBX: 'p', GBp: 'p', JPY: '¥', CNY: '¥', CHF: 'CHF', HKD: 'HK$', CAD: 'C$', AUD: 'A$', SEK: 'kr', NOK: 'kr', DKK: 'kr', KRW: '₩', INR: '₹', TWD: 'NT$', ILS: '₪', ILA: 'ag.', ZAR: 'R', ZAC: 'c' };
 /** Währungszeichen der Handelswährung (Indizes: Punkte) */
 const ccySym = id => (isIndex(id) ? 'Pkt.' : CCY_SYM[meta(id).currency] || meta(id).currency || '');
+/** Währung links vom Betrag (Indizes ohne Währung): '$ 333.17', 'CHF 78.40', 'p 7'884' */
+const curOf = (id, ccy) => (isIndex(id) ? '' : CCY_SYM[ccy || meta(id).currency] || ccy || meta(id).currency || '');
+const wc = (id, txt, ccy) => { const c = curOf(id, ccy); return c && txt !== '–' ? `<span class="cy">${esc(c)}</span>${txt}` : txt; };
 function pill(id) {
   const c = dayChange(id);
   const abs = prefs.pill === 'abs';
-  const txt = !c ? '–' : abs ? (ok(c.abs) ? `${sgn(c.abs)} ${ccySym(id)}` : '–') : pct(c.pct);
-  const other = !c ? '' : abs ? pct(c.pct) : ok(c.abs) ? `${sgn(c.abs)} ${ccySym(id)}` : '';
+  const absTxt = () => (isIndex(id) ? `${sgn(c.abs)} Pkt.` : `${ccySym(id)} ${sgn(c.abs)}`);
+  const txt = !c ? '–' : abs ? (ok(c.abs) ? absTxt() : '–') : pct(c.pct);
+  const other = !c ? '' : abs ? pct(c.pct) : ok(c.abs) ? absTxt() : '';
   return `<span class="pill ${chgCls(c?.pct)}" role="button" tabindex="0" data-pilltgl="1" aria-label="Tagesveränderung ${esc(txt)}, antippen für ${abs ? 'Prozent' : 'Betrag'}" title="Veränderung gegenüber Vortagesschluss: ${esc(txt)}${other ? ' (' + esc(other) + ')' : ''}${c && !c.live ? ' – letzter erfasster Stand' : ''}\nKlick: alle auf ${abs ? 'Prozent' : 'Betrag'} umschalten · Grün > +1 %, Rot < −1 %">${txt}</span>`;
 }
 function togglePill(e) {
@@ -549,7 +553,7 @@ function renderSidebar() {
     h += `<li class="st${tc}${selected === it.id ? ' sel' : ''}" data-id="${esc(it.id)}" data-pop="${esc(it.id)}"${drag ? ' draggable="true"' : ''}>
       <div class="nm"><b>${esc(symOf(it.id))}</b><small>${esc(itemName(it))}</small></div>
       ${sparkSvg(it.id, 44, 20)}
-      <div class="px"><span class="v">${p ? p2(p.v) : '–'}</span>${pill(it.id)}</div>${cols.map(c => `<div class="xc ${c.cls || ''}">${c.html(it.id)}</div>`).join('')}${infoBtn(it.id)}</li>`;
+      <div class="px"><span class="v">${p ? wc(it.id, p2(p.v)) : '–'}</span>${pill(it.id)}</div>${cols.map(c => `<div class="xc ${c.cls || ''}">${c.html(it.id)}</div>`).join('')}${infoBtn(it.id)}</li>`;
   }
   if (!items.length) h += `<li class="empty">${q ? 'Kein Treffer in der Watchlist.' : 'Watchlist leer'}</li>`;
   list.innerHTML = h;
@@ -592,7 +596,7 @@ function renderDetail(id) {
   const ccy = idx ? 'Punkte' : (m.currency || '');
   let h = `<div class="dhead"><button class="back" id="back">‹ Liste</button>
     <div class="dtitle"><h1>${esc(symOf(id))}</h1><span class="dname">${esc(m.longName || itemName(it))}</span><div class="dsub">${esc(ex)} · ${esc(ccy)} · ${esc(catOf(it))}</div></div>
-    <div class="dprice"><b>${p ? p2(p.v) : '–'}</b> <span class="${chgCls(c?.pct)}t">${c ? `${sgn(c.abs)} (${pct(c.pct)})` : ''}</span>
+    <div class="dprice"><b>${p ? wc(id, p2(p.v)) : '–'}</b> <span class="${chgCls(c?.pct)}t">${c ? `${ok(c.abs) && curOf(id) ? esc(curOf(id)) + ' ' : ''}${sgn(c.abs)} (${pct(c.pct)})` : ''}</span>
     <div class="dsub">${p?.live ? 'Jetzt ' + hmFmt.format(p.time) + ' (bis 15 Min. verzögert)' : p?.time ? 'Stand ' + timeFmt.format(p.time) : p ? `Erfasst ${header(p.k)} ${pad(p.h)}:00` : ''}</div></div></div>`;
   h += `<div class="tabs" id="tabs">${RANGES.map(r => `<button data-r="${r}" class="${r === range ? 'on' : ''}">${RANGE_LABEL[r]}</button>`).join('')}</div>`;
   h += `<div class="chartwrap">${bigChartSvg(id, range)}<div id="chartTip" class="ctip" hidden></div></div>`;
