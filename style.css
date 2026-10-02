@@ -1,4 +1,6 @@
 :root {
+  /* Kategorie-Tönungen: warmes Grau, Blaugrau, Sand, Mint, Lavendel, Rosé Petrol, Pfirsich (sehr dezent) */
+  --t0: rgba(150,125,100,.07); --t1: rgba(90,120,160,.07); --t2: rgba(205,170,95,.09); --t3: rgba(70,170,125,.07); --t4: rgba(135,110,205,.07); --t5: rgba(205,110,120,.06); --t6: rgba(60,160,175,.07); --t7: rgba(220,140,90,.07);
   --bg: #fff; --side: #f5f5f7; --fg: #1d1d1f; --muted: #86868b; --faint: #b0b0b5; --line: #e5e5ea;
   --accent: #0a84ff; --sel: rgba(10,132,255,.14); --group: rgba(120,120,128,.07); --sect: rgba(120,120,128,.12);
   --alt: rgba(120,120,128,.04); --purple: #8e44ad; --purplebg: rgba(142,68,173,.06);
@@ -6,7 +8,8 @@
   --today: rgba(10,132,255,.05); --card: #f5f5f7; --label-w: 270px;
 }
 @media (prefers-color-scheme: dark) {
-  :root { --bg: #1e1e1e; --side: #2a2a2c; --fg: #f2f2f7; --muted: #98989d; --faint: #636366; --line: #3a3a3c; --card: #2c2c2e;
+  :root { --t0: rgba(200,175,150,.07); --t1: rgba(140,170,215,.08); --t2: rgba(225,195,120,.07); --t3: rgba(110,210,160,.07); --t4: rgba(175,150,235,.08); --t5: rgba(235,140,150,.07); --t6: rgba(110,200,215,.07); --t7: rgba(240,170,120,.07);
+    --bg: #1e1e1e; --side: #2a2a2c; --fg: #f2f2f7; --muted: #98989d; --faint: #636366; --line: #3a3a3c; --card: #2c2c2e;
     --accent: #0a84ff; --sel: rgba(10,132,255,.28); --purple: #c38fe0; --purplebg: rgba(195,143,224,.08);
     --up: #30d158; --down: #ff453a; --upbg: #30d158; --downbg: #ff453a; --flatbg: #636366; --today: rgba(10,132,255,.08); }
 }
@@ -291,3 +294,17 @@ body[data-cols="4"] #app { grid-template-columns: 540px 1fr; }
 .list .pill { cursor: pointer; white-space: nowrap; user-select: none; -webkit-user-select: none; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 .list .pill:hover { filter: brightness(1.08); } .list .pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .psync.ok { color: var(--up); } .psync.warn { color: #c77700; }
+#depot { width: min(980px, 96vw); }
+.lotswrap { overflow-x: auto; }
+dialog .lots input[type=number] { width: 96px; } dialog .lots input.fx { width: 92px; } dialog .lots input[type=date] { width: 132px; }
+dialog .lots select { height: 30px; } dialog .lots td { padding: 3px 4px; vertical-align: top; } dialog .lots small.sub { font-size: 10.5px; }
+dialog .lots tr.sell td { background: rgba(255,59,48,.06); } dialog .lots tr.new td { border-top: 1px solid var(--line); }
+dialog .lots input:disabled { opacity: .55; }
+
+/* Kategorie-Tönung (Zeilen + Abschnittskopf); Hover als Overlay, Auswahl überdeckt die Tönung */
+.list li.t0 { background-color: var(--t0); } .list li.t1 { background-color: var(--t1); } .list li.t2 { background-color: var(--t2); }
+.list li.t3 { background-color: var(--t3); } .list li.t4 { background-color: var(--t4); } .list li.t5 { background-color: var(--t5); }
+.list li.t6 { background-color: var(--t6); } .list li.t7 { background-color: var(--t7); }
+.list li.st:hover { background-image: linear-gradient(var(--group), var(--group)); }
+.list li.cat[class*=" t"] { margin-top: 8px; padding-top: 9px; border-radius: 8px 8px 0 0; }
+.list li.st.sel { background: var(--sel); }

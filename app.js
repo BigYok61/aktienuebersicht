@@ -202,13 +202,28 @@ const lineCls = v => (!ok(v) ? 'flat' : v >= 0 ? 'up' : 'down');
 
 // ---------------------------------------------------------------- Depot
 function lotsOf(id) { return portfolio.lots[id] || []; }
+const isSell = l => l.side === 'sell';
+/** Betrag CHF eines Kaufs/Verkaufs: gespeicherter Betrag, sonst Anzahl × Kurs × Wechselkurs */
+function lotChf(l, base, unit) {
+  if (ok(l.chf)) return l.chf;
+  const fx = base === 'CHF' ? 1 : l.fx; return ok(fx) ? l.qty * l.price * unit * fx : null;
+}
+/** Bestand nach Durchschnittskosten: Käufe erhöhen Einstand, Verkäufe senken ihn anteilig (realisierter G/V separat) */
 function holding(id) {
-  const lots = lotsOf(id); if (!lots.length) return null;
+  const lots = [...lotsOf(id)].sort((a, b) => a.date.localeCompare(b.date)); if (!lots.length) return null;
   const [base, unit] = ccyInfo(meta(id).currency);
-  let qty = 0, cost = 0, costChf = 0, costChfOk = true;
+  let qty = 0, cost = 0, costChf = 0, costChfOk = true, realized = 0, realizedOk = true, sells = 0;
   for (const l of lots) {
-    qty += +l.qty; cost += l.qty * l.price;
-    const fx = base === 'CHF' ? 1 : l.fx; if (fx == null) costChfOk = false; else costChf += l.qty * l.price * unit * fx;
+    const chf = lotChf(l, base, unit);
+    if (isSell(l)) {
+      sells++;
+      const s = Math.min(+l.qty, qty), avgC = qty ? cost / qty : 0, avgChf = qty ? costChf / qty : 0;
+      if (chf == null || !costChfOk) realizedOk = false; else realized += chf * (l.qty ? s / l.qty : 0) - avgChf * s;
+      cost -= avgC * s; costChf -= avgChf * s; qty -= s;
+    } else {
+      qty += +l.qty; cost += l.qty * l.price;
+      if (chf == null) costChfOk = false; else costChf += chf;
+    }
   }
   const avg = qty ? cost / qty : null;
   const p = nowPrice(id), fx = nowFx(base);
@@ -216,18 +231,26 @@ function holding(id) {
   const dc = dayChange(id);
   return { qty, avg, costChf: costChfOk ? costChf : null, value, gain: value != null && costChfOk ? value - costChf : null,
     gainPct: value != null && costChfOk && costChf ? (value / costChf - 1) * 100 : null, live: p?.live && fx?.live,
+    realizedChf: sells ? (realizedOk ? realized : null) : null, sells,
     dayChf: dc && fx && dc.abs != null ? qty * dc.abs * unit * fx.v : null };
 }
 function slotValueChf(k, h) {
   let total = 0, any = false;
   for (const id of Object.keys(portfolio.lots)) {
     const lots = lotsOf(id); if (!lots.length) continue;
-    const qty = lots.reduce((s, l) => s + (l.date <= k ? +l.qty : 0), 0); if (!qty) continue;
+    const qty = lots.reduce((s, l) => s + (l.date <= k ? (isSell(l) ? -l.qty : +l.qty) : 0), 0); if (!(qty > 0)) continue;
     const v = val(id, k, h); const [base, unit] = ccyInfo(meta(id).currency); const fx = fxAt(base, k, h);
     if (v == null || fx == null) return null;
     total += qty * v * unit * fx; any = true;
   }
   return any ? total : null;
+}
+/** Wechselkurs (1 Währung = x CHF) am Handelstag: erfasster Kurs des Tages (Zeitpunkte), sonst EZB via Frankfurter, sonst aktuell */
+async function fxForTrade(ccy, date) {
+  if (ccy === 'CHF') return { v: 1, src: 'CHF' };
+  const sl = quotes.days?.[date]?.fx; if (sl) for (const h of [...HOURS].reverse()) { const v = sl[pad(h)]?.[ccy]; if (v != null) return { v, src: `erfasst ${dmy(date)} ${pad(h)}:00` }; }
+  try { const v = await fxOnDate(ccy, date); if (v != null) return { v, src: `EZB ${dmy(date)} (Frankfurter)` }; } catch { /* weiter */ }
+  const n = nowFx(ccy); return n ? { v: n.v, src: 'aktueller Kurs (Ersatz)' } : { v: null, src: 'nicht verfügbar' };
 }
 async function fxOnDate(ccy, date) {
   if (ccy === 'CHF') return 1;
@@ -503,6 +526,13 @@ function togglePill(e) {
   prefs.pill = prefs.pill === 'abs' ? 'pct' : 'abs'; savePrefs();
   renderSidebar();
 }
+/** Dezente Hintergrundtönung je Kategorie (stabil: Reihenfolge der Kategorien, sonst Hash des Namens; 8 Töne) */
+const TINTS = 8;
+function catTint(c) {
+  const i = (watch.categories || []).indexOf(c);
+  if (i >= 0) return i % TINTS;
+  let x = 0; for (const ch of String(c)) x = (x * 31 + ch.charCodeAt(0)) >>> 0; return x % TINTS;
+}
 function renderSidebar() {
   const list = $('list');
   const q = searchQ.trim().toLowerCase();
@@ -513,9 +543,10 @@ function renderSidebar() {
   let lastCat = null;
   const drag = prefs.sort === 'manual' && !q;
   for (const it of items) {
-    if (prefs.sort === 'cat' && catOf(it) !== lastCat) { lastCat = catOf(it); h += `<li class="cat">${esc(lastCat)}</li>`; }
+    const tc = ` t${catTint(catOf(it))}`;
+    if (prefs.sort === 'cat' && catOf(it) !== lastCat) { lastCat = catOf(it); h += `<li class="cat${tc}">${esc(lastCat)}</li>`; }
     const p = nowPrice(it.id);
-    h += `<li class="st${selected === it.id ? ' sel' : ''}" data-id="${esc(it.id)}" data-pop="${esc(it.id)}"${drag ? ' draggable="true"' : ''}>
+    h += `<li class="st${tc}${selected === it.id ? ' sel' : ''}" data-id="${esc(it.id)}" data-pop="${esc(it.id)}"${drag ? ' draggable="true"' : ''}>
       <div class="nm"><b>${esc(symOf(it.id))}</b><small>${esc(itemName(it))}</small></div>
       ${sparkSvg(it.id, 44, 20)}
       <div class="px"><span class="v">${p ? p2(p.v) : '–'}</span>${pill(it.id)}</div>${cols.map(c => `<div class="xc ${c.cls || ''}">${c.html(it.id)}</div>`).join('')}${infoBtn(it.id)}</li>`;
@@ -602,7 +633,7 @@ function renderDetail(id) {
     </div>
     ${idx ? '' : `<div class="card"><h3>Mein Bestand <small>nur auf diesem Gerät</small></h3>
       ${hold ? `<div class="kv"><span>Anzahl</span><b>${nf0.format(hold.qty)}</b></div><div class="kv"><span>Ø Kaufpreis</span><b>${p2(hold.avg)} ${esc(m.currency || '')}</b></div>
-      <div class="kv"><span>Einstand CHF</span><b>${p2(hold.costChf)}</b></div><div class="kv"><span>Wert CHF</span><b>${p2(hold.value)}</b></div>
+      <div class="kv"><span>Bezahlt CHF (Einstand)</span><b>${p2(hold.costChf)}</b></div>${hold.sells ? `<div class="kv"><span>Realisiert CHF</span><b class="${lineCls(hold.realizedChf)}t">${sgn(hold.realizedChf)}</b></div>` : ''}<div class="kv"><span>Wert CHF</span><b>${p2(hold.value)}</b></div>
       <div class="kv"><span>G/V</span><b class="${lineCls(hold.gain)}t">${sgn(hold.gain)} (${pct(hold.gainPct)})</b></div><div class="kv"><span>Heute CHF</span><b class="${lineCls(hold.dayChf)}t">${sgn(hold.dayChf)}</b></div>` : '<p class="sub">Kein Bestand erfasst.</p>'}
       <button id="dDepot">Käufe erfassen …</button></div>
     <div class="card"><h3>Kursalarme <small>Push via ntfy</small></h3>
@@ -703,7 +734,7 @@ function popHtml(id) {
   }
   // Mein Bestand
   const hold = holding(id);
-  if (hold) h += grp('Mein Bestand', `<div class="pgrid">${kv('Anzahl', nf0.format(hold.qty))}${kv('Ø Kaufpreis', p2(hold.avg))}${kv('Einstand CHF', p2(hold.costChf))}${kv('Wert CHF', p2(hold.value))}${kv('Heute CHF', sgn(hold.dayChf), lineCls(hold.dayChf) + 't')}${kv('G/V CHF', `${sgn(hold.gain)} (${pct(hold.gainPct)})`, lineCls(hold.gain) + 't', true)}</div>`, ' <small>nur auf diesem Gerät</small>');
+  if (hold) h += grp('Mein Bestand', `<div class="pgrid">${kv('Anzahl', nf0.format(hold.qty))}${kv('Ø Kaufpreis', p2(hold.avg))}${kv('Bezahlt CHF', p2(hold.costChf))}${hold.sells ? kv('Realisiert CHF', sgn(hold.realizedChf), lineCls(hold.realizedChf) + 't') : ''}${kv('Wert CHF', p2(hold.value))}${kv('Heute CHF', sgn(hold.dayChf), lineCls(hold.dayChf) + 't')}${kv('G/V CHF', `${sgn(hold.gain)} (${pct(hold.gainPct)})`, lineCls(hold.gain) + 't', true)}</div>`, ' <small>nur auf diesem Gerät</small>');
   return h;
 }
 const pop = { el: null, id: null, anchor: null, pinned: false, showT: 0, hideT: 0, html: '', x: null, lp: null, suppressClick: false };
@@ -1147,38 +1178,69 @@ function renderDepot(focusId) {
   const sel = focusId || dlg.dataset.id || items[0]?.id;
   dlg.dataset.id = sel;
   const m = meta(sel), lots = lotsOf(sel), hold = holding(sel);
+  const [base, unit] = ccyInfo(m.currency), isChf = base === 'CHF', cur = esc(m.currency || '');
+  const fxLab = isChf ? 'Wechselkurs' : `Wechselkurs (1 ${esc(base)} = x CHF)`;
+  const chfOf = (q, pr, fx) => (q > 0 && pr > 0 && (isChf || fx > 0) ? q * pr * unit * (isChf ? 1 : fx) : null);
   let h = `<h2>Depot</h2><p class="sub">Verschlüsselt im Repo gespeichert (data/portfolio.enc.json, gleiches Passwort) – auf allen Geräten gleich; lokal zwischengespeichert für offline.</p>
     <p class="small psync ${pSync.level}">${esc(pSync.text)}</p>
     <div class="row"><select id="dSel">${items.map(it => `<option value="${esc(it.id)}" ${it.id === sel ? 'selected' : ''}>${esc(itemName(it))} (${esc(meta(it.id).currency || '')})${lotsOf(it.id).length ? ' ●' : ''}</option>`).join('')}</select>
-    ${hold ? `<span class="sub">Anzahl ${nf0.format(hold.qty)} · Ø Kaufpreis ${p2(hold.avg)} ${esc(m.currency || '')} · Wert ${p2(hold.value)} CHF · ${sgn(hold.gain)} CHF (${pct(hold.gainPct)})</span>` : ''}</div>
-    <table class="lots"><thead><tr><th>Kaufdatum</th><th class="n">Anzahl</th><th class="n">Kaufpreis (${esc(m.currency || '')})</th><th class="n">Devisenkurs CHF</th><th class="n">Einstand CHF</th><th></th></tr></thead><tbody>`;
-  const [base, unit] = ccyInfo(m.currency);
+    ${hold ? `<span class="sub">Anzahl ${nf0.format(hold.qty)} · Ø Kaufpreis ${p2(hold.avg)} ${cur} · Bezahlt ${p2(hold.costChf)} CHF · Wert ${p2(hold.value)} CHF · ${sgn(hold.gain)} CHF (${pct(hold.gainPct)})${hold.sells ? ` · realisiert ${sgn(hold.realizedChf)} CHF` : ''}</span>` : ''}</div>
+    <div class="lotswrap"><table class="lots"><thead><tr><th>Datum</th><th>Art</th><th class="n">Anzahl</th><th class="n">Kurs (${cur})</th><th class="n">${fxLab}</th><th class="n">Bezahlt / erhalten CHF</th><th></th></tr></thead><tbody>`;
+  const sideSel = (v, attrs) => `<select ${attrs}><option value="buy"${v !== 'sell' ? ' selected' : ''}>Kauf</option><option value="sell"${v === 'sell' ? ' selected' : ''}>Verkauf</option></select>`;
+  const fxInp = (v, attrs) => `<input type="number" step="any" min="0" class="fx" ${attrs} value="${isChf ? 1 : v ?? ''}"${isChf ? ' disabled title="CHF-Titel: Wechselkurs 1"' : ''}>`;
   lots.forEach((l, i) => {
-    h += `<tr><td><input type="date" data-f="date" data-i="${i}" value="${esc(l.date)}"></td><td class="n"><input type="number" step="any" min="0" data-f="qty" data-i="${i}" value="${l.qty}"></td>
-      <td class="n"><input type="number" step="any" min="0" data-f="price" data-i="${i}" value="${l.price}"></td><td class="n">${base === 'CHF' ? '1' : p4(l.fx)}</td>
-      <td class="n">${l.fx != null || base === 'CHF' ? p2(l.qty * l.price * unit * (base === 'CHF' ? 1 : l.fx)) : '–'}</td><td><button class="danger" data-rm="${i}">Löschen</button></td></tr>`;
+    const chf = lotChf(l, base, unit);
+    h += `<tr class="${isSell(l) ? 'sell' : ''}"><td><input type="date" data-f="date" data-i="${i}" value="${esc(l.date)}"></td><td>${sideSel(l.side, `data-f="side" data-i="${i}"`)}</td>
+      <td class="n"><input type="number" step="any" min="0" data-f="qty" data-i="${i}" value="${l.qty}"></td>
+      <td class="n"><input type="number" step="any" min="0" data-f="price" data-i="${i}" value="${l.price}"></td>
+      <td class="n">${fxInp(l.fx, `data-f="fx" data-i="${i}"`)}${l.fxSrc && !isChf ? `<br><small class="sub">${esc(l.fxSrc)}</small>` : ''}</td>
+      <td class="n"><b>${chf != null ? p2(chf) : '–'}</b></td><td><button class="danger" data-rm="${i}">Löschen</button></td></tr>`;
   });
-  h += `<tr><td><input type="date" id="nDate" value="${zurichToday()}"></td><td class="n"><input type="number" step="any" min="0" id="nQty" placeholder="Anzahl"></td>
-    <td class="n"><input type="number" step="any" min="0" id="nPrice" placeholder="Preis"></td><td></td><td></td><td><button id="nAdd">Hinzufügen</button></td></tr></tbody></table>
-    <p class="small">Devisenkurs am Kaufdatum: EZB-Referenzkurs via Frankfurter (letzter verfügbarer Kurs vor dem Datum).</p>
+  h += `<tr class="new"><td><input type="date" id="nDate" value="${zurichToday()}"></td><td>${sideSel('buy', 'id="nSide"')}</td><td class="n"><input type="number" step="any" min="0" id="nQty" placeholder="Anzahl"></td>
+    <td class="n"><input type="number" step="any" min="0" id="nPrice" placeholder="Kurs"></td><td class="n">${fxInp(null, 'id="nFx" placeholder="lädt …"')}<br><small class="sub" id="nFxSrc"></small></td>
+    <td class="n"><b id="nChf">–</b></td><td><button id="nAdd">Hinzufügen</button></td></tr></tbody></table></div>
+    <p class="small">Wechselkurs am Handelstag vorausgefüllt (erfasster Tageskurs, sonst EZB-Referenzkurs via Frankfurter, sonst aktueller Kurs) – kann überschrieben werden.
+    Bezahlt CHF = Anzahl × Kurs × Wechselkurs${unit !== 1 ? ` (Kurs in ${cur} = 1/100 ${esc(base)})` : ''}; dient als Einstand für Gewinn/Verlust in CHF. Verkäufe senken den Bestand zum Durchschnittseinstand.</p>
     <div class="row"><button id="dExp">Export (JSON)</button><label class="chk"><button id="dImpBtn">Import (JSON)</button><input type="file" id="dImp" accept="application/json,.json" hidden></label><span style="flex:1"></span><button id="dClose">Schliessen</button></div>
     <p id="dMsg" class="small"></p>`;
   dlg.innerHTML = h;
   const msg = t => { dlg.querySelector('#dMsg').textContent = t; };
-  dlg.querySelector('#dSel').onchange = e => renderDepot(e.target.value);
-  dlg.querySelector('#dClose').onclick = () => dlg.close();
-  dlg.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (!confirm('Kauf löschen?')) return; const [gone] = lots.splice(+b.dataset.rm, 1); if (gone?.id) (portfolio.deleted ||= {})[gone.id] = new Date().toISOString(); if (!lots.length) delete portfolio.lots[sel]; savePortfolio(); renderDepot(sel); render(); });
+  const q = s => dlg.querySelector(s);
+  q('#dSel').onchange = e => renderDepot(e.target.value);
+  q('#dClose').onclick = () => dlg.close();
+  dlg.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (!confirm('Eintrag löschen?')) return; const [gone] = lots.splice(+b.dataset.rm, 1); if (gone?.id) (portfolio.deleted ||= {})[gone.id] = new Date().toISOString(); if (!lots.length) delete portfolio.lots[sel]; savePortfolio(); renderDepot(sel); render(); });
   dlg.querySelectorAll('[data-f]').forEach(inp => inp.onchange = async () => {
     const l = lots[+inp.dataset.i]; const f = inp.dataset.f;
-    l[f] = f === 'date' ? inp.value : +inp.value; l.mod = new Date().toISOString();
-    if (f === 'date') { l.fx = null; try { l.fx = await fxOnDate(base, l.date); } catch (e) { msg(`Devisenkurs nicht verfügbar: ${e.message}`); } }
+    if (f === 'date' || f === 'side') l[f] = inp.value; else l[f] = +inp.value;
+    if (f === 'fx') l.fxSrc = 'manuell';
+    if (f === 'date' && !isChf && l.fxSrc !== 'manuell') { const r = await fxForTrade(base, l.date); l.fx = r.v; l.fxSrc = r.src; }
+    if (isChf) l.fx = 1;
+    l.chf = chfOf(l.qty, l.price, l.fx); l.mod = new Date().toISOString();
     savePortfolio(); renderDepot(sel); render();
   });
-  dlg.querySelector('#nAdd').onclick = async () => {
-    const date = dlg.querySelector('#nDate').value, qty = +dlg.querySelector('#nQty').value, price = +dlg.querySelector('#nPrice').value;
-    if (!date || !(qty > 0) || !(price > 0)) return msg('Bitte Datum, Anzahl und Kaufpreis eingeben.');
-    let fx = null; try { fx = await fxOnDate(base, date); } catch (e) { msg(`Devisenkurs nicht verfügbar (${e.message}) – wird später nachgetragen.`); }
-    (portfolio.lots[sel] ||= []).push({ id: crypto.randomUUID(), date, qty, price, fx, mod: new Date().toISOString() });
+  // Neuer Eintrag: Wechselkurs für das Datum vorausfüllen, "Bezahlt CHF" live berechnen
+  let fxManual = false, fxReq = 0;
+  const upd = () => { const c = chfOf(+q('#nQty').value, +q('#nPrice').value, +q('#nFx').value); q('#nChf').textContent = c != null ? p2(c) : '–'; };
+  const prefill = async () => {
+    if (isChf) { q('#nFxSrc').textContent = ''; return upd(); }
+    if (fxManual) return;
+    const n = ++fxReq; q('#nFx').placeholder = 'lädt …';
+    const r = await fxForTrade(base, q('#nDate').value || zurichToday());
+    if (n !== fxReq || fxManual) return;
+    q('#nFx').value = r.v ?? ''; q('#nFxSrc').textContent = r.src; upd();
+  };
+  q('#nFx').oninput = () => { fxManual = true; q('#nFxSrc').textContent = 'manuell'; upd(); };
+  q('#nQty').oninput = upd; q('#nPrice').oninput = upd; q('#nDate').onchange = prefill;
+  prefill();
+  q('#nAdd').onclick = async () => {
+    const date = q('#nDate').value, qty = +q('#nQty').value, price = +q('#nPrice').value, side = q('#nSide').value;
+    let fx = isChf ? 1 : +q('#nFx').value;
+    if (!date || !(qty > 0) || !(price > 0)) return msg('Bitte Datum, Anzahl und Kurs eingeben.');
+    if (!isChf && !(fx > 0)) { const r = await fxForTrade(base, date); fx = r.v; }
+    if (side === 'sell' && hold && qty > hold.qty + 1e-9) return msg(`Verkauf grösser als Bestand (${nf0.format(hold.qty)}).`);
+    const e = { id: crypto.randomUUID(), date, side, qty, price, fx: fx > 0 ? fx : null, fxSrc: isChf ? 'CHF' : fxManual ? 'manuell' : q('#nFxSrc').textContent || null, chf: chfOf(qty, price, fx), mod: new Date().toISOString() };
+    if (e.chf == null) msg('Wechselkurs nicht verfügbar – Betrag CHF wird später nachgetragen.');
+    (portfolio.lots[sel] ||= []).push(e);
     portfolio.lots[sel].sort((a, b) => a.date.localeCompare(b.date));
     savePortfolio(); renderDepot(sel); render();
   };
@@ -1203,7 +1265,13 @@ async function fillMissingFx() {
   let changed = false;
   for (const [id, lots] of Object.entries(portfolio.lots)) {
     const [base] = ccyInfo(meta(id).currency);
-    for (const l of lots) if (l.fx == null && base !== 'CHF' && meta(id).currency) { try { l.fx = await fxOnDate(base, l.date); l.mod = new Date().toISOString(); changed = true; } catch { /* später */ } }
+    const [, unit] = ccyInfo(meta(id).currency);
+    if (!meta(id).currency) continue;
+    for (const l of lots) {
+      if (base === 'CHF') { if (l.fx !== 1 || !ok(l.chf)) { l.fx = 1; l.chf = l.qty * l.price * unit; l.mod = new Date().toISOString(); changed = true; } continue; }
+      if (l.fx == null) { const r = await fxForTrade(base, l.date); if (r.v != null) { l.fx = r.v; l.fxSrc = r.src; } }
+      if (l.fx != null && !ok(l.chf)) { l.chf = l.qty * l.price * unit * l.fx; l.mod = new Date().toISOString(); changed = true; }
+    }
   }
   if (changed) { savePortfolio(); render(); }
 }
