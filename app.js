@@ -1107,27 +1107,46 @@ function setPSync(level, text) {
 }
 const lotCount = p => Object.values(p?.lots || {}).reduce((n, ls) => n + ls.length, 0);
 /** Zusammenführen pro Kauf (id): neuere Änderung (mod) gewinnt, Löschungen (deleted) bleiben gelöscht */
+/* Gemeinsames Depot-Format (data/portfolio.enc.json, auch Mac-App), Version 2 – abwärtskompatibel zu Version 1:
+   lots:       { titel: [ {id, date, side?, qty, price, fx, fxSrc?, chf?, accountId?, mod} ] }
+   dividends:  { titel: [ {id, date, accountId?, gross, fees, tax, net, netManual?, currency, fx?, fxSrc?, chf?, grossChf?, lotId?, note?, mod} ] }
+   currencies: [ {id, code, name, symbol, mod} ]   banks: [ {id, name, notes?, mod} ]
+   accounts:   [ {id, bankId, name, iban?, currency?, mod} ]   deleted: { id: Zeitpunkt } (Tombstones für alle Einträge)
+   Unbekannte Felder (auch in Einträgen) bleiben erhalten – die Web-App bearbeitet nur lots. */
+const P_MAPS = ['lots', 'dividends'], P_LISTS = ['currencies', 'banks', 'accounts'], P_LOCAL = ['syncedAt', 'dirty'];
 function mergePortfolio(a, b) {
   const del = { ...(a?.deleted || {}) };
   for (const [k, t] of Object.entries(b?.deleted || {})) if (!del[k] || t > del[k]) del[k] = t;
-  const byId = {};
-  for (const src of [a, b]) for (const [sid, ls] of Object.entries(src?.lots || {})) for (const l of ls) {
-    const key = l.id || `${sid}|${l.date}|${l.qty}|${l.price}`;
-    const cur = byId[key];
-    if (!cur || (l.mod || '') > (cur.l.mod || '')) byId[key] = { sid, l };
-  }
-  const lots = {};
-  for (const { sid, l } of Object.values(byId)) {
-    if (l.id && del[l.id] && del[l.id] >= (l.mod || '')) continue;
-    (lots[sid] ||= []).push(l);
-  }
+  const gone = x => x.id && del[x.id] && del[x.id] >= (x.mod || '');
+  const newer = (x, cur) => !cur || (x.mod || '') > (cur.mod || '');
   const sorted = o => Object.fromEntries(Object.keys(o).sort().map(k => [k, o[k]]));
-  for (const ls of Object.values(lots)) ls.sort((x, y) => x.date.localeCompare(y.date) || String(x.id).localeCompare(String(y.id)));
-  const updated = [a?.updated, b?.updated].filter(Boolean).sort().pop();
-  return { version: 1, lots: sorted(lots), deleted: sorted(del), updated };
+  // übrige Felder vom neueren Stand übernehmen (nichts verlieren, was eine andere App ergänzt)
+  const [older, newest] = (a?.updated || '') > (b?.updated || '') ? [b, a] : [a, b];
+  const out = {};
+  for (const src of [older, newest]) for (const [k, v] of Object.entries(src || {})) if (![...P_MAPS, ...P_LISTS, ...P_LOCAL, 'deleted', 'version', 'updated'].includes(k)) out[k] = v;
+  for (const f of P_MAPS) {
+    const byId = {};
+    for (const src of [a, b]) for (const [sid, ls] of Object.entries(src?.[f] || {})) for (const l of ls || []) {
+      const key = l.id || `${sid}|${l.date}|${l.qty ?? l.gross}|${l.price ?? ''}`;
+      if (newer(l, byId[key]?.l)) byId[key] = { sid, l };
+    }
+    const m = {};
+    for (const { sid, l } of Object.values(byId)) if (!gone(l)) (m[sid] ||= []).push(l);
+    for (const ls of Object.values(m)) ls.sort((x, y) => x.date.localeCompare(y.date) || String(x.id).localeCompare(String(y.id)));
+    if (f === 'lots' || Object.keys(m).length) out[f] = sorted(m);
+  }
+  for (const f of P_LISTS) {
+    const byId = {};
+    for (const src of [a, b]) for (const x of src?.[f] || []) if (x && x.id && newer(x, byId[x.id])) byId[x.id] = x;
+    const list = Object.values(byId).filter(x => !gone(x)).sort((x, y) => String(x.code || x.name || '').localeCompare(String(y.code || y.name || '')) || x.id.localeCompare(y.id));
+    if (list.length) out[f] = list;
+  }
+  const extended = P_LISTS.some(f => out[f]) || !!out.dividends || [a, b].some(x => (x?.version || 1) >= 2);
+  return { ...out, version: extended ? 2 : 1, deleted: sorted(del), updated: [a?.updated, b?.updated].filter(Boolean).sort().pop() };
 }
-const sameLots = (a, b) => JSON.stringify(mergePortfolio(a, {}).lots) === JSON.stringify(mergePortfolio(b, {}).lots);
-const portfolioPayload = p => ({ version: 1, lots: p.lots || {}, deleted: p.deleted || {}, updated: p.updated || new Date().toISOString() });
+const pContent = p => { const m = mergePortfolio(p, {}); delete m.updated; return JSON.stringify(m); };
+const sameLots = (a, b) => pContent(a) === pContent(b); // ganzer synchronisierter Inhalt (Käufe, Dividenden, Banken …)
+const portfolioPayload = p => { const o = { ...p, updated: p.updated || new Date().toISOString() }; for (const k of P_LOCAL) delete o[k]; o.version ||= 1; o.lots ||= {}; o.deleted ||= {}; return o; };
 /** Repo-Stand lesen: mit Token über die API (frisch, mit sha), sonst öffentlich (verschlüsselt) über raw/Pages */
 async function fetchRemotePortfolio() {
   if (canEdit()) { const { sha, blob } = await ghGet(FILES.portfolio); return { sha, blob }; }
@@ -1181,7 +1200,7 @@ async function pushPortfolio(message) {
       if (blob && blob.salt !== keySalt) throw new Error('Passwort im Repo wurde geändert – bitte neu anmelden');
       const remote = blob ? await decryptBlob(blob) : null;
       const merged = remote ? mergePortfolio(remote, portfolio) : portfolioPayload(portfolio);
-      if (remote && sameLots(merged, remote) && JSON.stringify(merged.deleted) === JSON.stringify(remote.deleted || {})) { // nichts Neues
+      if (remote && sameLots(merged, remote)) { // nichts Neues
         portfolio = Object.assign(merged, { syncedAt: new Date().toISOString(), dirty: false }); pSync.sha = sha; storePortfolioLocal();
         setPSync('ok', `Im Repo gespeichert (${lotCount(portfolio)} Käufe).`); render(); return;
       }
@@ -1294,7 +1313,7 @@ function renderDepot(focusId) {
       const now = new Date().toISOString(), del = { ...(portfolio.deleted || {}) }, keep = new Set(Object.values(j.lots).flat().map(l => l.id));
       for (const l of Object.values(portfolio.lots).flat()) if (l.id && !keep.has(l.id)) del[l.id] = now;
       for (const ls of Object.values(j.lots)) for (const l of ls) { l.id ||= crypto.randomUUID(); l.mod = now; }
-      portfolio = { version: 1, lots: j.lots, deleted: del, syncedAt: portfolio.syncedAt }; savePortfolio(); renderDepot(); render(); msg('Importiert.');
+      portfolio = { ...j, version: j.version || 1, lots: j.lots, deleted: { ...(j.deleted || {}), ...del }, syncedAt: portfolio.syncedAt }; delete portfolio.dirty; savePortfolio(); renderDepot(); render(); msg('Importiert.');
     } catch (err) { msg(`Import fehlgeschlagen: ${err.message}`); }
   };
 }
