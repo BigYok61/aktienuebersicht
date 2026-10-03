@@ -328,3 +328,14 @@ dialog .lots input:disabled { opacity: .55; }
 .sessbox .sbx b { font-size: 15px; font-weight: 600; } .sessbox .sbx b .cy { font-size: .78em; margin-right: .2em; }
 .sessbox .sbx span { font-size: 12px; font-weight: 600; margin-left: 6px; } .sessbox small { color: var(--muted); font-size: 11px; }
 .dprice .sessbox + .dsub { margin-top: 4px; }
+/* Depot: Formular Kauf/Verkauf (Bank, Konto, Währung, Spesen) */
+dialog fieldset.txform { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin: 10px 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px 12px; align-items: start; }
+dialog fieldset.txform legend { font-weight: 600; padding: 0 4px; }
+dialog fieldset.txform label { display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--sub, #888); }
+dialog fieldset.txform label[hidden] { display: none; }
+dialog fieldset.txform input, dialog fieldset.txform select { width: 100%; box-sizing: border-box; color: var(--fg, inherit); }
+dialog fieldset.txform .pair { display: flex; gap: 6px; } dialog fieldset.txform .pair input { flex: 1; min-width: 0; } dialog fieldset.txform .pair select { width: 80px; }
+dialog fieldset.txform .txsum { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px 24px; padding-top: 6px; border-top: 1px solid var(--line); }
+dialog fieldset.txform .txsum div { display: flex; gap: 8px; align-items: baseline; } dialog fieldset.txform .txsum span { font-size: 12px; }
+dialog fieldset.txform .row { grid-column: 1 / -1; }
+dialog .lots tr.editing td { background: rgba(10,132,255,.10); } dialog .lots td.nowrap { white-space: nowrap; }

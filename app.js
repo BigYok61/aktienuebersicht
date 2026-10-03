@@ -203,34 +203,46 @@ const lineCls = v => (!ok(v) ? 'flat' : v >= 0 ? 'up' : 'down');
 // ---------------------------------------------------------------- Depot
 function lotsOf(id) { return portfolio.lots[id] || []; }
 const isSell = l => l.side === 'sell';
-/** Betrag CHF eines Kaufs/Verkaufs: gespeicherter Betrag, sonst Anzahl × Kurs × Wechselkurs */
+/** Betrag CHF für die Aktien (ohne Spesen): gespeicherter Betrag, sonst Anzahl × Kurs × Wechselkurs (Handelswährung l.currency hat Vorrang) */
 function lotChf(l, base, unit) {
   if (ok(l.chf)) return l.chf;
-  const fx = base === 'CHF' ? 1 : l.fx; return ok(fx) ? l.qty * l.price * unit * fx : null;
+  const [b, u] = l.currency ? ccyInfo(l.currency) : [base, unit];
+  const fx = b === 'CHF' ? 1 : l.fx; return ok(fx) ? l.qty * l.price * u * fx : null;
 }
-/** Bestand nach Durchschnittskosten: Käufe erhöhen Einstand, Verkäufe senken ihn anteilig (realisierter G/V separat) */
+/** Spesen CHF einer Transaktion (0 ohne Spesen, null = Wechselkurs fehlt) */
+function lotFeesChf(l, stockCcy) {
+  if (!(+l.fees)) return 0;
+  if (ok(l.feesChf)) return l.feesChf;
+  const tc = l.currency || stockCcy || 'CHF', fc = l.feesCcy || tc, [b, u] = ccyInfo(fc);
+  const fx = b === 'CHF' ? 1 : (l.feesFx ?? (fc === tc ? l.fx : null));
+  return ok(fx) ? l.fees * u * fx : null;
+}
+/** Bestand nach Durchschnittskosten: Käufe erhöhen Einstand (Spesen separat geführt), Verkäufe senken ihn anteilig.
+    Gewinn/Verlust und realisierter G/V rechnen inkl. Spesen (Kaufspesen erhöhen den Einstand, Verkaufsspesen senken den Erlös). */
 function holding(id) {
   const lots = [...lotsOf(id)].sort((a, b) => a.date.localeCompare(b.date)); if (!lots.length) return null;
-  const [base, unit] = ccyInfo(meta(id).currency);
-  let qty = 0, cost = 0, costChf = 0, costChfOk = true, realized = 0, realizedOk = true, sells = 0;
+  const sc = meta(id).currency, [base, unit] = ccyInfo(sc);
+  let qty = 0, nq = 0, cost = 0, costChf = 0, fees = 0, costChfOk = true, feesOk = true, realized = 0, realizedOk = true, sells = 0;
   for (const l of lots) {
-    const chf = lotChf(l, base, unit);
+    const chf = lotChf(l, base, unit), fc = lotFeesChf(l, sc), native = !l.currency || l.currency === sc;
     if (isSell(l)) {
       sells++;
-      const s = Math.min(+l.qty, qty), avgC = qty ? cost / qty : 0, avgChf = qty ? costChf / qty : 0;
-      if (chf == null || !costChfOk) realizedOk = false; else realized += chf * (l.qty ? s / l.qty : 0) - avgChf * s;
-      cost -= avgC * s; costChf -= avgChf * s; qty -= s;
+      const s = Math.min(+l.qty, qty), avgChf = qty ? costChf / qty : 0, avgF = qty ? fees / qty : 0, avgC = nq ? cost / nq : 0;
+      if (chf == null || fc == null || !costChfOk || !feesOk) realizedOk = false; else realized += (chf - fc) * (l.qty ? s / l.qty : 0) - (avgChf + avgF) * s;
+      costChf -= avgChf * s; fees -= avgF * s; const sn = Math.min(s, nq); cost -= avgC * sn; nq -= sn; qty -= s;
     } else {
-      qty += +l.qty; cost += l.qty * l.price;
+      qty += +l.qty; if (native) { nq += +l.qty; cost += l.qty * l.price; }
       if (chf == null) costChfOk = false; else costChf += chf;
+      if (fc == null) feesOk = false; else fees += fc;
     }
   }
-  const avg = qty ? cost / qty : null;
+  const avg = nq ? cost / nq : null, okAll = costChfOk && feesOk, incl = costChf + fees;
   const p = nowPrice(id), fx = nowFx(base);
   const value = p && fx ? qty * p.v * unit * fx.v : null;
   const dc = dayChange(id);
-  return { qty, avg, costChf: costChfOk ? costChf : null, value, gain: value != null && costChfOk ? value - costChf : null,
-    gainPct: value != null && costChfOk && costChf ? (value / costChf - 1) * 100 : null, live: p?.live && fx?.live,
+  return { qty, avg, costChf: costChfOk ? costChf : null, feesChf: feesOk ? fees : null, costInclChf: okAll ? incl : null,
+    value, gain: value != null && okAll ? value - incl : null,
+    gainPct: value != null && okAll && incl ? (value / incl - 1) * 100 : null, live: p?.live && fx?.live,
     realizedChf: sells ? (realizedOk ? realized : null) : null, sells,
     dayChf: dc && fx && dc.abs != null ? qty * dc.abs * unit * fx.v : null };
 }
@@ -656,8 +668,8 @@ function renderDetail(id) {
     </div>
     ${idx ? '' : `<div class="card"><h3>Mein Bestand <small>verschlüsselt im Repo, auf allen Geräten</small></h3>
       ${hold ? `<div class="kv"><span>Anzahl</span><b>${nf0.format(hold.qty)}</b></div><div class="kv"><span>Ø Kaufpreis</span><b>${p2(hold.avg)} ${esc(m.currency || '')}</b></div>
-      <div class="kv"><span>Bezahlt CHF (Einstand)</span><b>${p2(hold.costChf)}</b></div>${hold.sells ? `<div class="kv"><span>Realisiert CHF</span><b class="${lineCls(hold.realizedChf)}t">${sgn(hold.realizedChf)}</b></div>` : ''}<div class="kv"><span>Wert CHF</span><b>${p2(hold.value)}</b></div>
-      <div class="kv"><span>G/V</span><b class="${lineCls(hold.gain)}t">${sgn(hold.gain)} (${pct(hold.gainPct)})</b></div><div class="kv"><span>Heute CHF</span><b class="${lineCls(hold.dayChf)}t">${sgn(hold.dayChf)}</b></div>` : '<p class="sub">Kein Bestand erfasst.</p>'}
+      <div class="kv"><span>Einstand CHF ohne Spesen</span><b>${p2(hold.costChf)}</b></div><div class="kv"><span>Spesen CHF</span><b>${p2(hold.feesChf)}</b></div><div class="kv"><span>Einstand CHF inkl. Spesen</span><b>${p2(hold.costInclChf)}</b></div>${hold.sells ? `<div class="kv"><span>Realisiert CHF</span><b class="${lineCls(hold.realizedChf)}t">${sgn(hold.realizedChf)}</b></div>` : ''}<div class="kv"><span>Wert CHF</span><b>${p2(hold.value)}</b></div>
+      <div class="kv"><span>G/V (inkl. Spesen)</span><b class="${lineCls(hold.gain)}t">${sgn(hold.gain)} (${pct(hold.gainPct)})</b></div><div class="kv"><span>Heute CHF</span><b class="${lineCls(hold.dayChf)}t">${sgn(hold.dayChf)}</b></div>` : '<p class="sub">Kein Bestand erfasst.</p>'}
       <button id="dDepot">Kauf/Verkauf erfassen …</button></div>
     <div class="card"><h3>Kursalarme <small>Push via ntfy</small></h3>
       ${myAlerts.length ? myAlerts.map(a => `<div class="kv"><span>${a.op === '<' ? 'unter' : 'über'} ${p2(a.price)}${a.note ? ' · ' + esc(a.note) : ''}</span>${canEdit() ? `<button class="danger sm" data-adel="${esc(a.id)}">✕</button>` : ''}</div>`).join('') : '<p class="sub">Keine Alarme.</p>'}
@@ -757,7 +769,7 @@ function popHtml(id) {
   }
   // Mein Bestand
   const hold = holding(id);
-  if (hold) h += grp('Mein Bestand', `<div class="pgrid">${kv('Anzahl', nf0.format(hold.qty))}${kv('Ø Kaufpreis', p2(hold.avg))}${kv('Bezahlt CHF', p2(hold.costChf))}${hold.sells ? kv('Realisiert CHF', sgn(hold.realizedChf), lineCls(hold.realizedChf) + 't') : ''}${kv('Wert CHF', p2(hold.value))}${kv('Heute CHF', sgn(hold.dayChf), lineCls(hold.dayChf) + 't')}${kv('G/V CHF', `${sgn(hold.gain)} (${pct(hold.gainPct)})`, lineCls(hold.gain) + 't', true)}</div>`, ' <small>nur auf diesem Gerät</small>');
+  if (hold) h += grp('Mein Bestand', `<div class="pgrid">${kv('Anzahl', nf0.format(hold.qty))}${kv('Ø Kaufpreis', p2(hold.avg))}${kv('Einstand o. Spesen', p2(hold.costChf))}${kv('inkl. Spesen', p2(hold.costInclChf))}${hold.sells ? kv('Realisiert CHF', sgn(hold.realizedChf), lineCls(hold.realizedChf) + 't') : ''}${kv('Wert CHF', p2(hold.value))}${kv('Heute CHF', sgn(hold.dayChf), lineCls(hold.dayChf) + 't')}${kv('G/V CHF inkl. Spesen', `${sgn(hold.gain)} (${pct(hold.gainPct)})`, lineCls(hold.gain) + 't', true)}</div>`, ' <small>nur auf diesem Gerät</small>');
   return h;
 }
 const pop = { el: null, id: null, anchor: null, pinned: false, showT: 0, hideT: 0, html: '', x: null, lp: null, suppressClick: false };
@@ -1232,72 +1244,163 @@ function renderDepot(focusId) {
   const dlg = $('depot');
   const items = orderedItems().filter(it => !isIndex(it.id));
   const sel = focusId || dlg.dataset.id || items[0]?.id;
+  if (dlg.dataset.id !== sel) delete dlg.dataset.edit;
   dlg.dataset.id = sel;
   const m = meta(sel), lots = lotsOf(sel), hold = holding(sel);
-  const [base, unit] = ccyInfo(m.currency), isChf = base === 'CHF', cur = esc(m.currency || '');
-  const fxLab = isChf ? 'Wechselkurs' : `Wechselkurs (1 ${esc(base)} = x CHF)`;
-  const chfOf = (q, pr, fx) => (q > 0 && pr > 0 && (isChf || fx > 0) ? q * pr * unit * (isChf ? 1 : fx) : null);
+  const sc = m.currency || 'CHF', cur = esc(m.currency || '');
+  // Banken, Konten und Währungen kommen aus dem Depot-Dokument (definiert in der Mac-App); ohne Banken: Bankname als Freitext
+  const alive = x => x && x.id && !portfolio.deleted?.[x.id];
+  const banks = (portfolio.banks || []).filter(alive).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'de'));
+  const accounts = (portfolio.accounts || []).filter(alive);
+  const bankName = id => banks.find(b => b.id === id)?.name;
+  const accLabel = id => { const a = accounts.find(x => x.id === id); return a ? `${bankName(a.bankId) || '?'} · ${a.name}` : ''; };
+  const txBank = l => accLabel(l.accountId) || bankName(l.bankId) || l.bank || '';
+  const ccys = [...new Set([sc, ...(portfolio.currencies || []).filter(alive).map(c => c.code).filter(Boolean), 'CHF'])];
+  const editing = lots.find(l => l.id && l.id === dlg.dataset.edit) || null;
+  const mny = (c, v) => (v != null && isFinite(v) ? `${esc(c)} ${p2(v)}` : '–');
   let h = `<h2>Depot</h2><p class="sub">Verschlüsselt im Repo gespeichert (data/portfolio.enc.json, gleiches Passwort) – auf allen Geräten gleich; lokal zwischengespeichert für offline.</p>
     <p class="small psync ${pSync.level}">${esc(pSync.text)}</p>
     <div class="row"><select id="dSel">${items.map(it => `<option value="${esc(it.id)}" ${it.id === sel ? 'selected' : ''}>${esc(itemName(it))} (${esc(meta(it.id).currency || '')})${lotsOf(it.id).length ? ' ●' : ''}</option>`).join('')}</select>
-    ${hold ? `<span class="sub">Anzahl ${nf0.format(hold.qty)} · Ø Kaufpreis ${p2(hold.avg)} ${cur} · Bezahlt ${p2(hold.costChf)} CHF · Wert ${p2(hold.value)} CHF · ${sgn(hold.gain)} CHF (${pct(hold.gainPct)})${hold.sells ? ` · realisiert ${sgn(hold.realizedChf)} CHF` : ''}</span>` : ''}</div>
-    <div class="lotswrap"><table class="lots"><thead><tr><th>Datum</th><th>Art</th><th class="n">Anzahl</th><th class="n">Kurs (${cur})</th><th class="n">${fxLab}</th><th class="n">Bezahlt / erhalten CHF</th><th></th></tr></thead><tbody>`;
-  const sideSel = (v, attrs) => `<select ${attrs}><option value="buy"${v !== 'sell' ? ' selected' : ''}>Kauf</option><option value="sell"${v === 'sell' ? ' selected' : ''}>Verkauf</option></select>`;
-  const fxInp = (v, attrs) => `<input type="number" step="any" min="0" class="fx" ${attrs} value="${isChf ? 1 : v ?? ''}"${isChf ? ' disabled title="CHF-Titel: Wechselkurs 1"' : ''}>`;
+    ${hold ? `<span class="sub">Anzahl ${nf0.format(hold.qty)} · Ø Kaufpreis ${p2(hold.avg)} ${cur} · Einstand ${p2(hold.costChf)} CHF + Spesen ${p2(hold.feesChf)} = ${p2(hold.costInclChf)} CHF · Wert ${p2(hold.value)} CHF · G/V inkl. Spesen ${sgn(hold.gain)} CHF (${pct(hold.gainPct)})${hold.sells ? ` · realisiert ${sgn(hold.realizedChf)} CHF` : ''}</span>` : ''}</div>
+    <div class="lotswrap"><table class="lots"><thead><tr><th>Datum</th><th>Art</th><th>Bank · Konto</th><th class="n">Anzahl</th><th class="n">Kurs</th><th class="n">Wechselkurs</th><th class="n">Aktien CHF</th><th class="n">Spesen CHF</th><th class="n">Total CHF</th><th></th></tr></thead><tbody>`;
   lots.forEach((l, i) => {
-    const chf = lotChf(l, base, unit);
-    h += `<tr class="${isSell(l) ? 'sell' : ''}"><td><input type="date" data-f="date" data-i="${i}" value="${esc(l.date)}"></td><td>${sideSel(l.side, `data-f="side" data-i="${i}"`)}</td>
-      <td class="n"><input type="number" step="any" min="0" data-f="qty" data-i="${i}" value="${l.qty}"></td>
-      <td class="n"><input type="number" step="any" min="0" data-f="price" data-i="${i}" value="${l.price}"></td>
-      <td class="n">${fxInp(l.fx, `data-f="fx" data-i="${i}"`)}${l.fxSrc && !isChf ? `<br><small class="sub">${esc(l.fxSrc)}</small>` : ''}</td>
-      <td class="n"><b>${chf != null ? p2(chf) : '–'}</b></td><td><button class="danger" data-rm="${i}">Löschen</button></td></tr>`;
+    const tc = l.currency || sc, [tb, tu] = ccyInfo(tc), a = lotChf(l, ...ccyInfo(sc)), f = lotFeesChf(l, sc);
+    const tot = a != null && f != null ? (isSell(l) ? a - f : a + f) : null;
+    h += `<tr class="${isSell(l) ? 'sell' : ''}${editing === l ? ' editing' : ''}"><td>${dmy(l.date)}</td><td>${isSell(l) ? 'Verkauf' : 'Kauf'}</td><td>${esc(txBank(l)) || '–'}</td>
+      <td class="n">${nf0.format(l.qty)}</td><td class="n">${mny(tc, l.price)}</td><td class="n" title="${esc(l.fxSrc || '')}">${tb === 'CHF' ? '1' : l.fx != null ? (+l.fx).toFixed(4) : '–'}</td>
+      <td class="n">${p2(a)}</td><td class="n" title="${+l.fees ? esc(`${l.feesCcy || tc} ${p2(l.fees)}`) : ''}">${+l.fees ? p2(f) : '–'}</td><td class="n"><b>${p2(tot)}</b></td>
+      <td class="nowrap"><button class="sm" data-ed="${i}">Bearbeiten</button> <button class="danger sm" data-rm="${i}">Löschen</button></td></tr>`;
+    void tu;
   });
-  h += `<tr class="new"><td><input type="date" id="nDate" value="${zurichToday()}"></td><td>${sideSel('buy', 'id="nSide"')}</td><td class="n"><input type="number" step="any" min="0" id="nQty" placeholder="Anzahl"></td>
-    <td class="n"><input type="number" step="any" min="0" id="nPrice" placeholder="Kurs"></td><td class="n">${fxInp(null, 'id="nFx" placeholder="lädt …"')}<br><small class="sub" id="nFxSrc"></small></td>
-    <td class="n"><b id="nChf">–</b></td><td><button id="nAdd">Hinzufügen</button></td></tr></tbody></table></div>
+  if (!lots.length) h += '<tr><td colspan="10" class="sub">Noch keine Käufe/Verkäufe erfasst.</td></tr>';
+  const e = editing || {};
+  const eTc = e.currency || sc, eFc = e.feesCcy || eTc, eBank = e.bankId || accounts.find(a => a.id === e.accountId)?.bankId || '';
+  const opt = (v, t, cur) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(t)}</option>`;
+  const knownBankNames = [...new Set(Object.values(portfolio.lots || {}).flat().map(l => l.bank).filter(Boolean))];
+  h += `</tbody></table></div>
+    <fieldset class="txform"><legend>${editing ? `Transaktion vom ${dmy(e.date)} bearbeiten` : 'Kauf/Verkauf erfassen'}</legend>
+    <label>Datum<input type="date" id="nDate" value="${esc(e.date || zurichToday())}"></label>
+    <label>Art<select id="nSide">${opt('buy', 'Kauf', e.side === 'sell' ? 'sell' : 'buy')}${opt('sell', 'Verkauf', e.side === 'sell' ? 'sell' : 'buy')}</select></label>
+    ${banks.length
+      ? `<label>Bank<select id="nBank">${opt('', '– keine –', eBank)}${banks.map(b => opt(b.id, b.name, eBank)).join('')}</select></label>
+         <label>Konto (optional)<select id="nAcc"></select></label>`
+      : `<label>Bank (optional)<input id="nBankTxt" list="nBankList" value="${esc(e.bank || '')}" placeholder="Name der Bank"><datalist id="nBankList">${knownBankNames.map(n => `<option value="${esc(n)}">`).join('')}</datalist></label>`}
+    <label>Währung<select id="nCcy">${ccys.map(c => opt(c, c, eTc)).join('')}</select></label>
+    <label>Anzahl<input type="number" step="any" min="0" id="nQty" value="${e.qty ?? ''}"></label>
+    <label><span>Kurs (<span id="nCcyLab">${esc(eTc)}</span>)</span><input type="number" step="any" min="0" id="nPrice" value="${e.price ?? ''}"></label>
+    <label><span id="nFxLab">Wechselkurs</span><input type="number" step="any" min="0" class="fx" id="nFx" value="${e.fx ?? ''}"><small class="sub" id="nFxSrc">${esc(e.fxSrc || '')}</small></label>
+    <label>Spesen (optional)<span class="pair"><input type="number" step="any" min="0" id="nFees" value="${+e.fees ? e.fees : ''}" placeholder="0.00"><select id="nFeesCcy">${ccys.map(c => opt(c, c, eFc)).join('')}</select></span></label>
+    <label id="nFeesFxWrap"><span id="nFeesFxLab">Wechselkurs Spesen</span><input type="number" step="any" min="0" class="fx" id="nFeesFx" value="${e.feesFx ?? ''}"><small class="sub" id="nFeesFxSrc"></small></label>
+    <div class="txsum">
+      <div><span id="nSharesLab">Bezahlt für Aktien</span><b id="nShares">–</b></div>
+      <div><span>Spesen</span><b id="nFeesSum">–</b></div>
+      <div><span id="nTotLab">Total</span><b id="nTot">–</b></div>
+    </div>
+    <div class="row"><button id="nAdd">${editing ? 'Speichern' : 'Hinzufügen'}</button>${editing ? '<button id="nCancel">Abbrechen</button>' : ''}</div>
+    </fieldset>
     <p class="small">Wechselkurs am Handelstag vorausgefüllt (erfasster Tageskurs, sonst EZB-Referenzkurs via Frankfurter, sonst aktueller Kurs) – kann überschrieben werden.
-    Bezahlt CHF = Anzahl × Kurs × Wechselkurs${unit !== 1 ? ` (Kurs in ${cur} = 1/100 ${esc(base)})` : ''}; dient als Einstand für Gewinn/Verlust in CHF. Verkäufe senken den Bestand zum Durchschnittseinstand.</p>
+    Aktien CHF = Anzahl × Kurs × Wechselkurs; Total = Aktien + Spesen (Verkauf: Erlös − Spesen). Einstand und Gewinn/Verlust rechnen inkl. Spesen; Verkäufe senken den Bestand zum Durchschnittseinstand.
+    ${banks.length ? '' : 'Banken, Konten und Währungen lassen sich in der Mac-App (Erfassen) definieren und stehen dann hier zur Auswahl.'}</p>
     <div class="row"><button id="dExp">Export (JSON)</button><label class="chk"><button id="dImpBtn">Import (JSON)</button><input type="file" id="dImp" accept="application/json,.json" hidden></label><span style="flex:1"></span><button id="dClose">Schliessen</button></div>
     <p id="dMsg" class="small"></p>`;
   dlg.innerHTML = h;
   const msg = t => { dlg.querySelector('#dMsg').textContent = t; };
   const q = s => dlg.querySelector(s);
-  q('#dSel').onchange = e => renderDepot(e.target.value);
+  q('#dSel').onchange = ev => renderDepot(ev.target.value);
   q('#dClose').onclick = () => dlg.close();
-  dlg.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (!confirm('Eintrag löschen?')) return; const [gone] = lots.splice(+b.dataset.rm, 1); if (gone?.id) (portfolio.deleted ||= {})[gone.id] = new Date().toISOString(); if (!lots.length) delete portfolio.lots[sel]; savePortfolio(); renderDepot(sel); render(); });
-  dlg.querySelectorAll('[data-f]').forEach(inp => inp.onchange = async () => {
-    const l = lots[+inp.dataset.i]; const f = inp.dataset.f;
-    if (f === 'date' || f === 'side') l[f] = inp.value; else l[f] = +inp.value;
-    if (f === 'fx') l.fxSrc = 'manuell';
-    if (f === 'date' && !isChf && l.fxSrc !== 'manuell') { const r = await fxForTrade(base, l.date); l.fx = r.v; l.fxSrc = r.src; }
-    if (isChf) l.fx = 1;
-    l.chf = chfOf(l.qty, l.price, l.fx); l.mod = new Date().toISOString();
-    savePortfolio(); renderDepot(sel); render();
-  });
-  // Neuer Eintrag: Wechselkurs für das Datum vorausfüllen, "Bezahlt CHF" live berechnen
-  let fxManual = false, fxReq = 0;
-  const upd = () => { const c = chfOf(+q('#nQty').value, +q('#nPrice').value, +q('#nFx').value); q('#nChf').textContent = c != null ? p2(c) : '–'; };
-  const prefill = async () => {
-    if (isChf) { q('#nFxSrc').textContent = ''; return upd(); }
-    if (fxManual) return;
-    const n = ++fxReq; q('#nFx').placeholder = 'lädt …';
-    const r = await fxForTrade(base, q('#nDate').value || zurichToday());
-    if (n !== fxReq || fxManual) return;
-    q('#nFx').value = r.v ?? ''; q('#nFxSrc').textContent = r.src; upd();
+  dlg.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { if (!confirm('Eintrag löschen?')) return; const [gone] = lots.splice(+b.dataset.rm, 1); if (gone?.id) (portfolio.deleted ||= {})[gone.id] = new Date().toISOString(); if (gone?.id === dlg.dataset.edit) delete dlg.dataset.edit; if (!lots.length) delete portfolio.lots[sel]; savePortfolio(); renderDepot(sel); render(); });
+  dlg.querySelectorAll('[data-ed]').forEach(b => b.onclick = () => { const l = lots[+b.dataset.ed]; l.id ||= crypto.randomUUID(); dlg.dataset.edit = l.id; renderDepot(sel); q('#nQty')?.focus(); });
+  if (q('#nCancel')) q('#nCancel').onclick = () => { delete dlg.dataset.edit; renderDepot(sel); };
+  // Konto-Auswahl nach Bank gefiltert
+  const fillAcc = keep => {
+    const s = q('#nAcc'); if (!s) return;
+    const b = q('#nBank').value, list = b ? accounts.filter(a => a.bankId === b) : [];
+    s.innerHTML = opt('', '– keines –', keep) + list.map(a => opt(a.id, a.currency ? `${a.name} (${a.currency})` : a.name, keep)).join('');
+    s.disabled = !b;
   };
-  q('#nFx').oninput = () => { fxManual = true; q('#nFxSrc').textContent = 'manuell'; upd(); };
-  q('#nQty').oninput = upd; q('#nPrice').oninput = upd; q('#nDate').onchange = prefill;
-  prefill();
+  if (q('#nBank')) { fillAcc(e.accountId || ''); q('#nBank').onchange = () => fillAcc(''); }
+  // Wechselkurse: je Währung vorausfüllen (Handelstag), von Hand überschreibbar; Beträge live
+  let fxManual = editing ? eTc : '', feesFxManual = editing && e.feesFx != null ? eFc : '', fxReq = 0, feesReq = 0;
+  const tc = () => q('#nCcy').value, fc = () => q('#nFeesCcy').value;
+  const isChfC = c => ccyInfo(c)[0] === 'CHF';
+  const txFx = () => (isChfC(tc()) ? 1 : +q('#nFx').value);
+  const feesFx = () => (isChfC(fc()) ? 1 : fc() === tc() ? txFx() : +q('#nFeesFx').value);
+  const calc = () => {
+    const qty = +q('#nQty').value, pr = +q('#nPrice').value, fee = +q('#nFees').value || 0;
+    const native = qty > 0 && pr > 0 ? qty * pr : null, f = txFx(), ff = feesFx();
+    const sharesChf = native != null && f > 0 ? native * ccyInfo(tc())[1] * f : null;
+    const feesChf = !fee ? 0 : ff > 0 ? fee * ccyInfo(fc())[1] * ff : null;
+    return { qty, pr, fee, native, f, ff, sharesChf, feesChf };
+  };
+  const upd = () => {
+    const c = calc(), sell = q('#nSide').value === 'sell', [tb] = ccyInfo(tc()), [fb] = ccyInfo(fc());
+    q('#nCcyLab').textContent = tc();
+    q('#nFxLab').textContent = tb === 'CHF' ? 'Wechselkurs' : `Wechselkurs (1 ${tb} = x CHF)`;
+    q('#nFx').disabled = tb === 'CHF'; if (tb === 'CHF') { q('#nFx').value = 1; q('#nFxSrc').textContent = 'CHF'; }
+    const needFeesFx = c.fee > 0 && fc() !== tc() && fb !== 'CHF';
+    q('#nFeesFxWrap').hidden = !needFeesFx; q('#nFeesFxLab').textContent = `Wechselkurs Spesen (1 ${fb} = x CHF)`;
+    q('#nSharesLab').textContent = sell ? 'Erlös für Aktien' : 'Bezahlt für Aktien';
+    q('#nTotLab').textContent = sell ? 'Total (Erlös nach Spesen)' : 'Total';
+    q('#nShares').innerHTML = `<span class="sub">${mny(tc(), c.native)}</span> ${c.sharesChf != null ? `CHF ${p2(c.sharesChf)}` : '–'}`;
+    q('#nFeesSum').innerHTML = c.fee ? `<span class="sub">${mny(fc(), c.fee)}</span> ${c.feesChf != null ? `CHF ${p2(c.feesChf)}` : '–'}` : '–';
+    q('#nTot').textContent = c.sharesChf != null && c.feesChf != null ? `CHF ${p2(sell ? c.sharesChf - c.feesChf : c.sharesChf + c.feesChf)}` : '–';
+  };
+  const sameDay = () => !editing || q('#nDate').value === e.date;
+  const prefill = async () => {
+    const c = tc(), [b] = ccyInfo(c); if (b === 'CHF') return upd();
+    if (fxManual === c && sameDay()) return upd();
+    const n = ++fxReq; q('#nFx').placeholder = 'lädt …';
+    const r = await fxForTrade(b, q('#nDate').value || zurichToday());
+    if (n !== fxReq || (fxManual === tc() && sameDay())) return;
+    q('#nFx').value = r.v ?? ''; q('#nFxSrc').textContent = r.src; fxManual = ''; upd();
+  };
+  const prefillFees = async () => {
+    const c = fc(), [b] = ccyInfo(c); if (b === 'CHF' || c === tc()) return upd();
+    if (feesFxManual === c && sameDay()) return upd();
+    const n = ++feesReq; q('#nFeesFx').placeholder = 'lädt …';
+    const r = await fxForTrade(b, q('#nDate').value || zurichToday());
+    if (n !== feesReq || (feesFxManual === fc() && sameDay())) return;
+    q('#nFeesFx').value = r.v ?? ''; q('#nFeesFxSrc').textContent = r.src; feesFxManual = ''; upd();
+  };
+  q('#nFx').oninput = () => { fxManual = tc(); q('#nFxSrc').textContent = 'manuell'; upd(); };
+  q('#nFeesFx').oninput = () => { feesFxManual = fc(); q('#nFeesFxSrc').textContent = 'manuell'; upd(); };
+  q('#nQty').oninput = upd; q('#nPrice').oninput = upd; q('#nSide').onchange = upd;
+  q('#nFees').oninput = () => { upd(); prefillFees(); };
+  q('#nDate').onchange = () => { prefill(); prefillFees(); };
+  q('#nCcy').onchange = () => { if (!(+q('#nFees').value)) q('#nFeesCcy').value = tc(); prefill(); prefillFees(); };
+  q('#nFeesCcy').onchange = prefillFees;
+  upd(); prefill(); prefillFees();
   q('#nAdd').onclick = async () => {
-    const date = q('#nDate').value, qty = +q('#nQty').value, price = +q('#nPrice').value, side = q('#nSide').value;
-    let fx = isChf ? 1 : +q('#nFx').value;
-    if (!date || !(qty > 0) || !(price > 0)) return msg('Bitte Datum, Anzahl und Kurs eingeben.');
-    if (!isChf && !(fx > 0)) { const r = await fxForTrade(base, date); fx = r.v; }
-    if (side === 'sell' && hold && qty > hold.qty + 1e-9) return msg(`Verkauf grösser als Bestand (${nf0.format(hold.qty)}).`);
-    const e = { id: crypto.randomUUID(), date, side, qty, price, fx: fx > 0 ? fx : null, fxSrc: isChf ? 'CHF' : fxManual ? 'manuell' : q('#nFxSrc').textContent || null, chf: chfOf(qty, price, fx), mod: new Date().toISOString() };
-    if (e.chf == null) msg('Wechselkurs nicht verfügbar – Betrag CHF wird später nachgetragen.');
-    (portfolio.lots[sel] ||= []).push(e);
+    const date = q('#nDate').value, side = q('#nSide').value, c = calc();
+    if (!date || !(c.qty > 0) || !(c.pr > 0)) return msg('Bitte Datum, Anzahl und Kurs eingeben.');
+    let f = c.f;
+    if (!(f > 0)) { const r = await fxForTrade(ccyInfo(tc())[0], date); f = r.v; }
+    if (c.fee < 0) return msg('Spesen: bitte einen positiven Betrag eingeben.');
+    if (c.fee > 0 && !(c.ff > 0) && !(fc() === tc() && f > 0)) return msg('Bitte einen Wechselkurs für die Spesen eingeben.');
+    if (side === 'sell') {
+      const held = lots.filter(l => l !== editing && l.date <= date).reduce((s, l) => s + (isSell(l) ? -l.qty : +l.qty), 0);
+      if (c.qty > held + 1e-9) return msg(`Verkauf grösser als der Bestand am ${dmy(date)} (${nf0.format(held)}).`);
+    }
+    const t = tc(), [tb, tu] = ccyInfo(t), x = editing || { id: crypto.randomUUID() };
+    Object.assign(x, { date, side, qty: c.qty, price: c.pr, currency: t, fx: f > 0 ? f : null,
+      fxSrc: tb === 'CHF' ? 'CHF' : fxManual === t ? 'manuell' : q('#nFxSrc').textContent || null,
+      chf: f > 0 ? c.qty * c.pr * tu * f : null, mod: new Date().toISOString() });
+    if (side !== 'sell') delete x.side;
+    if (banks.length) {
+      const b = q('#nBank').value, a = q('#nAcc').value;
+      if (b) { x.bankId = b; x.bank = bankName(b); } else { delete x.bankId; delete x.bank; }
+      if (a) x.accountId = a; else delete x.accountId;
+    } else {
+      const n = q('#nBankTxt').value.trim(); if (n) x.bank = n; else delete x.bank;
+    }
+    if (c.fee > 0) {
+      const fr = isChfC(fc()) ? 1 : fc() === t ? f : c.ff;
+      Object.assign(x, { fees: c.fee, feesCcy: fc(), feesFx: fr, feesChf: fr > 0 ? c.fee * ccyInfo(fc())[1] * fr : null });
+    } else for (const k of ['fees', 'feesCcy', 'feesFx', 'feesChf']) delete x[k];
+    if (x.chf == null) msg('Wechselkurs nicht verfügbar – Betrag CHF wird später nachgetragen.');
+    if (!editing) (portfolio.lots[sel] ||= []).push(x);
     portfolio.lots[sel].sort((a, b) => a.date.localeCompare(b.date));
+    delete dlg.dataset.edit;
     savePortfolio(); renderDepot(sel); render();
   };
   dlg.querySelector('#dExp').onclick = () => {
@@ -1320,10 +1423,9 @@ function renderDepot(focusId) {
 async function fillMissingFx() {
   let changed = false;
   for (const [id, lots] of Object.entries(portfolio.lots)) {
-    const [base] = ccyInfo(meta(id).currency);
-    const [, unit] = ccyInfo(meta(id).currency);
     if (!meta(id).currency) continue;
     for (const l of lots) {
+      const [base, unit] = ccyInfo(l.currency || meta(id).currency); // Handelswährung der Transaktion
       if (base === 'CHF') { if (l.fx !== 1 || !ok(l.chf)) { l.fx = 1; l.chf = l.qty * l.price * unit; l.mod = new Date().toISOString(); changed = true; } continue; }
       if (l.fx == null) { const r = await fxForTrade(base, l.date); if (r.v != null) { l.fx = r.v; l.fxSrc = r.src; } }
       if (l.fx != null && !ok(l.chf)) { l.chf = l.qty * l.price * unit * l.fx; l.mod = new Date().toISOString(); changed = true; }
